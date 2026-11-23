@@ -92,6 +92,7 @@ async function executarSeed() {
       notaFiscal: 'SEED-NF-002',
       transportadora: 'Logística Circular',
       statusProcessamento: 'TRIAGEM_CONCLUIDA',
+      dataConclusaoTriagem: diasAtras(3),
       observacoes: 'Lote de demonstração com equipamentos em diferentes etapas.',
     },
   ];
@@ -152,6 +153,34 @@ async function executarSeed() {
       statusRastreamento: 'BAIXA_DEFINITIVA',
       dataCadastro: diasAtras(5),
     },
+    {
+      id: 'SEED-EQUIP-005',
+      codigoBarrasInterno: 'SEED-BARCODE-005',
+      tipo: 'NOTEBOOK',
+      marca: 'Greencode',
+      modelo: 'Notebook sintético nível moderado',
+      anoFabricacao: agora.getFullYear() - 5,
+      estadoFisico: 'USADO_MODERADO',
+      pesoQuilogramas: 2.4,
+      loteId: 'SEED-LOT-001',
+      posicaoNoLote: 2,
+      statusRastreamento: 'EM_DESMONTE',
+      dataCadastro: diasAtras(5),
+    },
+    {
+      id: 'SEED-EQUIP-006',
+      codigoBarrasInterno: 'SEED-BARCODE-006',
+      tipo: 'NOTEBOOK',
+      marca: 'Greencode',
+      modelo: 'Notebook sintético nível grave',
+      anoFabricacao: agora.getFullYear() - 8,
+      estadoFisico: 'DANIFICADO_GRAVE',
+      pesoQuilogramas: 2.7,
+      loteId: 'SEED-LOT-001',
+      posicaoNoLote: 3,
+      statusRastreamento: 'MATERIAL_RECICLAVEL',
+      dataCadastro: diasAtras(5),
+    },
   ];
   const movimentacoes = [
     {
@@ -204,6 +233,36 @@ async function executarSeed() {
       observacao: 'Baixa registrada após destinação.',
       tipoEvento: 'STATUS',
     },
+    {
+      id: 'SEED-MOVE-ESTADO-001',
+      equipamentoId: 'SEED-EQUIP-001',
+      dataHora: diasAtras(2),
+      origem: 'NOVO',
+      destino: 'BOM_ESTADO',
+      responsavel: 'seed-sintetico',
+      observacao: 'Dado sintético de validação da previsão de vida útil.',
+      tipoEvento: 'ESTADO_FISICO',
+    },
+    {
+      id: 'SEED-MOVE-ESTADO-005',
+      equipamentoId: 'SEED-EQUIP-005',
+      dataHora: diasAtras(2),
+      origem: 'BOM_ESTADO',
+      destino: 'USADO_MODERADO',
+      responsavel: 'seed-sintetico',
+      observacao: 'Dado sintético de validação da previsão de vida útil.',
+      tipoEvento: 'ESTADO_FISICO',
+    },
+    {
+      id: 'SEED-MOVE-ESTADO-006',
+      equipamentoId: 'SEED-EQUIP-006',
+      dataHora: diasAtras(2),
+      origem: 'USADO_MODERADO',
+      destino: 'DANIFICADO_GRAVE',
+      responsavel: 'seed-sintetico',
+      observacao: 'Dado sintético de validação da previsão de vida útil.',
+      tipoEvento: 'ESTADO_FISICO',
+    },
   ];
 
   await prisma.$transaction(async (tx) => {
@@ -245,7 +304,7 @@ async function executarSeed() {
 
   console.log('Seed aplicado sem sobrescrever registros existentes:');
   console.log(`- ${organizacoes.length} organizações e ${contratos.length} contratos`);
-  console.log(`- ${lotes.length} lotes e ${equipamentos.length} equipamentos`);
+  console.log(`- ${lotes.length} lotes e ${equipamentos.length} equipamentos de validação sintética`);
   console.log(`- ${movimentacoes.length} movimentações`);
 }
 

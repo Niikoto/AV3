@@ -20,6 +20,7 @@ import { ServicoLotePrisma } from '../dist/services/prisma/ServicoLotePrisma.js'
 import { ServicoOrganizacaoPrisma } from '../dist/services/prisma/ServicoOrganizacaoPrisma.js';
 import { ServicoParametrosGlobaisPrisma } from '../dist/services/prisma/ServicoParametrosGlobaisPrisma.js';
 import { ServicoRelatorioPrisma } from '../dist/services/prisma/ServicoRelatorioPrisma.js';
+import { ServicoAnaliticoPrisma } from '../dist/services/prisma/ServicoAnaliticoPrisma.js';
 
 function gerarCnpj() {
   const base = `${Math.floor(Math.random() * 100_000_000).toString().padStart(8, '0')}0001`;
@@ -785,6 +786,41 @@ test('serviço Prisma de autenticação protege gestão de credenciais e não pu
         ],
       },
     });
+    await prisma.$disconnect();
+  }
+});
+
+test('serviço analítico executa os três cálculos e persiste os resultados', {
+  skip: !process.env.DATABASE_URL,
+}, async () => {
+  const prisma = new PrismaClient({
+    adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+  });
+  let conectado = false;
+  const ids = [];
+
+  try {
+    await prisma.$connect();
+    conectado = true;
+    const servico = new ServicoAnaliticoPrisma(prisma);
+
+    const eficiencia = await servico.executarEficiencia();
+    const rentabilidade = await servico.executarRentabilidade();
+    const vidaUtil = await servico.executarVidaUtil();
+    ids.push(eficiencia.id, rentabilidade.id, vidaUtil.id);
+
+    assert.equal(eficiencia.categoria, 'EFICIENCIA_OPERACIONAL');
+    assert.equal(rentabilidade.categoria, 'RENTABILIDADE');
+    assert.equal(vidaUtil.categoria, 'VIDA_UTIL_REMANESCENTE');
+    assert.equal(await prisma.resultadoAnalise.count({
+      where: { id: { in: [eficiencia.id, rentabilidade.id, vidaUtil.id] } },
+    }), 3);
+  } finally {
+    if (conectado) {
+      await prisma.resultadoAnalise.deleteMany({
+        where: { id: { in: ids } },
+      });
+    }
     await prisma.$disconnect();
   }
 });

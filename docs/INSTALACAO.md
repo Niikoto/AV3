@@ -52,9 +52,18 @@ DATABASE_URL=postgresql://usuario:senha@localhost:5432/greencode?schema=public
 JWT_SECRET=use-um-segredo-proprio-com-pelo-menos-32-caracteres
 PORT=3000
 JWT_EXPIRES_IN=30m
+ASYNC_REPORTS_ENABLED=true
+ASYNC_REPORT_ATTEMPTS=3
+ASYNC_REPORT_BACKOFF_MS=1000
+ASYNC_REPORT_CONCURRENCY=2
+ASYNC_REPORT_DB_POOL_MAX=4
+PUBLIC_API_RATE_LIMIT_MAX=60
+PUBLIC_API_RATE_LIMIT_WINDOW="1 minute"
 ```
 
 `DATABASE_URL` e `JWT_SECRET` são necessários para a API. `PORT` e `JWT_EXPIRES_IN` são opcionais. Não use o segredo de exemplo em produção.
+
+A fila assíncrona usa BullMQ com o backend PostgreSQL 13 ou superior, no schema `bullmq`. Ela inicia automaticamente quando `DATABASE_URL` está configurada. Na primeira inicialização, o BullMQ aplica suas migrações nesse schema; o usuário do banco precisa poder criar schemas, tabelas, funções e índices. Defina `ASYNC_REPORTS_ENABLED=false` para desativar os relatórios assíncronos. `ASYNC_REPORT_DB_POOL_MAX` limita conexões por instância BullMQ; cada processo da API abre uma instância de fila e uma de worker, além das conexões normais do Prisma. Redis e WSL não são necessários.
 
 ### Criar banco e iniciar o servidor
 

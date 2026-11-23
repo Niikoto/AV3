@@ -2,18 +2,22 @@ import type { FastifyInstance, FastifyRequest, preHandlerHookHandler } from 'fas
 import { randomUUID } from 'node:crypto';
 import type { PrismaClient } from '../generated/prisma/client.js';
 import {
+  CategoriaAnalise,
   EstadoFisico,
+  PermissaoApi,
   PapelUsuario,
   StatusLote,
   StatusRastreamento,
   TipoEquipamento,
 } from '../generated/prisma/enums.js';
+import { ServicoAnaliticoPrisma } from '../services/prisma/ServicoAnaliticoPrisma.js';
 import { ServicoAutenticacaoPrisma } from '../services/prisma/ServicoAutenticacaoPrisma.js';
 import { ServicoEquipamentoPrisma } from '../services/prisma/ServicoEquipamentoPrisma.js';
 import { ServicoLotePrisma } from '../services/prisma/ServicoLotePrisma.js';
 import { ServicoOrganizacaoPrisma } from '../services/prisma/ServicoOrganizacaoPrisma.js';
 import { ServicoParametrosGlobaisPrisma } from '../services/prisma/ServicoParametrosGlobaisPrisma.js';
 import { ServicoRelatorioPrisma } from '../services/prisma/ServicoRelatorioPrisma.js';
+import { ServicoApiPublicaPrisma } from '../services/prisma/ServicoApiPublicaPrisma.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -73,6 +77,7 @@ type CampoExtra = {
   maximum?: number;
   exclusiveMinimum?: number;
   minItems?: number;
+  uniqueItems?: boolean;
 };
 
 const schemaId = { type: 'string', minLength: 1, pattern: '\\S' } as const;
@@ -185,6 +190,8 @@ export function registrarRotasApi(
   const equipamentos = new ServicoEquipamentoPrisma(prisma);
   const parametros = new ServicoParametrosGlobaisPrisma(prisma);
   const relatorios = new ServicoRelatorioPrisma(prisma);
+  const analises = new ServicoAnaliticoPrisma(prisma);
+  const apiPublica = new ServicoApiPublicaPrisma(prisma);
 
   const autenticar = async (request: FastifyRequest): Promise<void> => {
     try {
@@ -265,6 +272,10 @@ export function registrarRotasApi(
   };
   const data = (value: string): Date => new Date(value);
   const periodo = (query: PeriodoQuery) => ({ inicio: data(query.inicio), fim: data(query.fim) });
+  const periodoOpcional = (body: { inicio?: string; fim?: string }) => ({
+    ...(body.inicio ? { inicio: data(body.inicio) } : {}),
+    ...(body.fim ? { fim: data(body.fim) } : {}),
+  });
 
   app.post<{ Body: { usuario: string; senha: string } }>('/auth/login', {
     schema: schemaBody(['usuario', 'senha'], { usuario: schemaNaoVazio, senha: schemaNaoVazio }),
@@ -972,4 +983,114 @@ export function registrarRotasApi(
     },
     preHandler: comPermissao(auditoria),
   }, async (request) => executar(() => relatorios.gerarRelatorioAuditoria(periodo(request.query))));
+
+  app.post<{ Body: { inicio?: string; fim?: string } }>('/analyses/efficiency', {
+    schema: schemaBody([], {
+      inicio: schemaData,
+      fim: schemaData,
+    }),
+    preHandler: comPermissao(auditoria),
+  }, async (request) => executar(() => analises.executarEficiencia(periodoOpcional(request.body))));
+
+  app.post<{ Body: { inicio?: string; fim?: string } }>('/analyses/profitability', {
+    schema: schemaBody([], {
+      inicio: schemaData,
+      fim: schemaData,
+    }),
+    preHandler: comPermissao(auditoria),
+  }, async (request) => executar(() => analises.executarRentabilidade(periodoOpcional(request.body))));
+
+  app.post<{ Body: { inicio?: string; fim?: string } }>('/analyses/remaining-life', {
+    schema: schemaBody([], {
+      inicio: schemaData,
+      fim: schemaData,
+    }),
+    preHandler: comPermissao(auditoria),
+  }, async (request) => executar(() => analises.executarVidaUtil(periodoOpcional(request.body))));
+
+  app.get<{ Querystring: { categoria?: CategoriaAnalise; limite?: number } }>('/analyses', {
+    schema: {
+      querystring: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          categoria: schemaEnum(CategoriaAnalise),
+          limite: { type: 'integer', minimum: 1, maximum: 200 },
+        },
+      },
+    },
+    preHandler: comPermissao(auditoria),
+  }, async (request) => executar(() => analises.listar(request.query.categoria, request.query.limite)));
+
+  app.get<{ Params: IdentificadorParams }>('/analyses/:id', {
+    schema: schemaParamsId,
+    preHandler: comPermissao(auditoria),
+  }, async (request) => executar(async () => {
+    const resultado = await analises.buscarPorId(request.params.id);
+    if (!resultado) throw new NaoEncontradoError('Análise não encontrada.');
+    return resultado;
+  }));
+
+  app.post<{ Body: { nome: string; organizacaoId: string } }>('/api/v1/admin/partners', {
+    schema: schemaBody(['nome', 'organizacaoId'], {
+      nome: schemaNaoVazio,
+      organizacaoId: schemaNaoVazio,
+    }),
+    preHandler: comPermissao(admin),
+  }, async (request, reply) => {
+    const parceiro = await executar(() => apiPublica.criarParceiro(
+      request.body.nome,
+      request.body.organizacaoId,
+    ));
+    return reply.code(201).send(parceiro);
+  });
+
+  app.post<{ Params: IdentificadorParams; Body: {
+    permissoes: PermissaoApi[];
+    expiraEm?: string;
+  } }>('/api/v1/admin/partners/:id/keys', {
+    schema: {
+      ...schemaParamsId,
+      ...schemaBody(['permissoes'], {
+        permissoes: {
+          type: 'array',
+          minItems: 1,
+          uniqueItems: true,
+          items: schemaEnum(PermissaoApi),
+        },
+        expiraEm: schemaData,
+      }),
+    },
+    preHandler: comPermissao(admin),
+  }, async (request, reply) => {
+    const expiraEm = request.body.expiraEm ? new Date(request.body.expiraEm) : undefined;
+    const criada = await executar(() => apiPublica.criarChave(
+      request.params.id,
+      request.body.permissoes,
+      expiraEm,
+    ));
+    return reply.code(201).send({
+      id: criada.registro.id,
+      chave: criada.chave,
+      prefixo: criada.registro.prefixo,
+      permissoes: criada.registro.permissoes,
+      expiraEm: criada.registro.expiraEm,
+      aviso: 'Guarde esta chave agora. Ela não poderá ser recuperada novamente.',
+    });
+  });
+
+  app.get('/api/v1/admin/partners/:id/keys', {
+    schema: schemaParamsId,
+    preHandler: comPermissao(admin),
+  }, async (request) => executar(() => apiPublica.listarChaves(
+    (request.params as IdentificadorParams).id,
+  )));
+
+  app.post<{ Params: IdentificadorParams }>('/api/v1/admin/keys/:id/revoke', {
+    schema: schemaParamsId,
+    preHandler: comPermissao(admin),
+  }, async (request, reply) => {
+    await executar(() => apiPublica.revogarChave(request.params.id));
+    return reply.code(204).send();
+  });
 }

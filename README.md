@@ -10,6 +10,9 @@ Sistema de logística reversa para organizações, contratos, lotes e equipament
 - Preserva histórico, correções, estornos e eventos de auditoria.
 - Gera relatórios operacionais, por organização, financeiros e de auditoria.
 - Controla acesso por usuário e papel.
+- Calcula análises de eficiência, rentabilidade e vida útil remanescente.
+- Expõe uma API pública versionada com chaves de API e permissões.
+- Processa relatórios públicos em filas BullMQ com PostgreSQL.
 
 ## Duas formas de uso
 
@@ -25,6 +28,17 @@ A API não inclui uma interface web própria. A página `/documentation` fornece
 - [Manual do usuário — CLI](docs/MANUAL_CLI.md)
 - [Manual do usuário — API](docs/MANUAL_API.md)
 - [Segurança e testes](docs/SEGURANCA_E_TESTES.md)
+- [Relatório técnico da AV3](RELATORIO_TECNICO_AV3.md)
+
+## Recursos da AV3
+
+- `POST /analyses/efficiency`, `POST /analyses/profitability` e `POST /analyses/remaining-life`: executam e persistem análises internas.
+- `GET /analyses` e `GET /analyses/:id`: consultam resultados históricos.
+- `/api/v1/public`: rastreamento, lotes e análises para parceiros externos autenticados por `X-API-Key`.
+- `/api/v1/admin/partners` e `/api/v1/admin/partners/:id/keys`: gestão administrativa de parceiros e chaves.
+- `/api/v1/public/reports/async`, `GET /api/v1/public/reports/:id/status` e `GET /api/v1/public/reports/:id/download`: relatórios assíncronos em JSON ou CSV.
+
+Configure PostgreSQL e as variáveis conforme [Instalação e configuração](docs/INSTALACAO.md). A fila BullMQ usa um schema PostgreSQL próprio e não requer Redis ou WSL. A fila é ativada junto com a API quando `DATABASE_URL` está configurada; use `ASYNC_REPORTS_ENABLED=false` para desativá-la. `ASYNC_REPORT_DB_POOL_MAX` ajusta o pool de conexões por instância BullMQ.
 
 ## Tecnologias
 

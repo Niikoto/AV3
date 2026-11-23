@@ -12,6 +12,7 @@ import { criarAplicacao } from '../dist/app.js';
 import { iniciarServidorHttp } from '../dist/serverRuntime.js';
 
 process.env.JWT_SECRET = 'test-secret-for-greencode-api-validation';
+process.env.ASYNC_REPORTS_ENABLED = 'false';
 
 test('health check confirma a conexão real com PostgreSQL', { skip: !process.env.DATABASE_URL }, async () => {
   const prisma = new PrismaClient({
@@ -57,6 +58,116 @@ test('rotas inexistentes retornam 404 com formato consistente', async () => {
   assert.equal(response.statusCode, 404);
   assert.deepEqual(response.json(), { error: 'NOT_FOUND', message: 'Rota não encontrada.' });
   await app.close();
+});
+
+test('API pública rejeita chave ausente e inválida', async () => {
+  const app = criarAplicacao({
+    chaveApi: {
+      findUnique: async () => null,
+      update: async () => ({}),
+    },
+    $queryRaw: async () => 1,
+    $disconnect: async () => {},
+  });
+
+  try {
+    const semChave = await app.inject({
+      method: 'GET',
+      url: '/api/v1/public/lots',
+    });
+    assert.equal(semChave.statusCode, 401);
+
+    const invalida = await app.inject({
+      method: 'GET',
+      url: '/api/v1/public/lots',
+      headers: { 'x-api-key': 'gc_live_chave_invalida' },
+    });
+    assert.equal(invalida.statusCode, 401);
+  } finally {
+    await app.close();
+  }
+});
+
+test('API pública aplica Rate Limit por chave', async () => {
+  process.env.PUBLIC_API_RATE_LIMIT_MAX = '1';
+  process.env.PUBLIC_API_RATE_LIMIT_WINDOW = '1 minute';
+  const app = criarAplicacao({
+    $queryRaw: async () => 1,
+    $disconnect: async () => {},
+  });
+
+  try {
+    const primeira = await app.inject({
+      method: 'GET',
+      url: '/api/v1/public/health',
+      headers: { 'x-api-key': 'gc_live_limitado' },
+    });
+    const segunda = await app.inject({
+      method: 'GET',
+      url: '/api/v1/public/health',
+      headers: { 'x-api-key': 'gc_live_limitado' },
+    });
+    assert.equal(primeira.statusCode, 200);
+    assert.equal(segunda.statusCode, 429);
+  } finally {
+    delete process.env.PUBLIC_API_RATE_LIMIT_MAX;
+    delete process.env.PUBLIC_API_RATE_LIMIT_WINDOW;
+    await app.close();
+  }
+});
+
+test('API pública isola rastreamento pela organização e exige permissão', async () => {
+  const hash = createHash('sha256').update('gc_live_valida').digest('hex');
+  const app = criarAplicacao({
+    chaveApi: {
+      findUnique: async ({ where }) => (
+        where.hashSecret === hash
+          ? {
+              id: 'CHAVE-1',
+              ativa: true,
+              revogadaEm: null,
+              expiraEm: null,
+              permissoes: ['RASTREAMENTO_LEITURA'],
+              parceiroId: 'PARCEIRO-1',
+              parceiro: {
+                id: 'PARCEIRO-1',
+                nome: 'Parceiro',
+                organizacaoId: 'ORG-1',
+                ativo: true,
+              },
+            }
+          : null
+      ),
+      update: async () => ({}),
+    },
+    equipamento: {
+      findFirst: async ({ where }) => (
+        where.lote.organizacaoId === 'ORG-1'
+          ? { id: 'EQ-1', lote: { id: 'LOTE-1' }, movimentacoes: [] }
+          : null
+      ),
+    },
+    $queryRaw: async () => 1,
+    $disconnect: async () => {},
+  });
+
+  try {
+    const autorizado = await app.inject({
+      method: 'GET',
+      url: '/api/v1/public/equipment/EQ-1/tracking',
+      headers: { 'x-api-key': 'gc_live_valida' },
+    });
+    assert.equal(autorizado.statusCode, 200);
+
+    const semPermissao = await app.inject({
+      method: 'GET',
+      url: '/api/v1/public/lots',
+      headers: { 'x-api-key': 'gc_live_valida' },
+    });
+    assert.equal(semPermissao.statusCode, 403);
+  } finally {
+    await app.close();
+  }
 });
 
 test('documentação OpenAPI descreve rotas, schemas de entrada e autenticação JWT', async () => {
@@ -112,6 +223,14 @@ test('documentação OpenAPI descreve rotas, schemas de entrada e autenticação
     assert.deepEqual(openApi.paths['/health'].get.responses['200'].content['application/json'].schema, {
       $ref: '#/components/schemas/HealthSuccessResponse',
     });
+    assert.deepEqual(
+      openApi.paths['/api/v1/public/lots'].get.security,
+      [{ apiKeyAuth: [] }],
+    );
+    assert.deepEqual(
+      openApi.paths['/api/v1/public/reports/async'].post.security,
+      [{ apiKeyAuth: [] }],
+    );
     for (const [path, pathItem] of Object.entries(openApi.paths)) {
       for (const operation of Object.values(pathItem)) {
         if (!operation || typeof operation !== 'object' || !('responses' in operation)) continue;

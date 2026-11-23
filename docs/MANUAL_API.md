@@ -294,6 +294,73 @@ As rotas de relatório retornam o conteúdo textual como corpo `text/plain`, nã
 - `status` de rastreamento: `AGUARDANDO_TRIAGEM`, `EM_TRIAGEM`, `AGUARDANDO_DESMONTE`, `EM_DESMONTE`, `PECAS_REAPROVEITADAS`, `MATERIAL_RECICLAVEL`, `DESCARTE_SEGURO`, `BAIXA_DEFINITIVA`.
 - `status` de lote: `RECEBIDO`, `EM_TRIAGEM`, `TRIAGEM_CONCLUIDA`, `ENCAMINHADO`, `FINALIZADO`.
 
+## Relatórios assíncronos da API pública
+
+Os relatórios grandes são processados por BullMQ no PostgreSQL já usado pela API. Não é necessário instalar ou iniciar Redis. O backend cria e atualiza o schema `bullmq` ao iniciar; o usuário do banco precisa ter permissão para criar esse schema. Para desativar a fila, configure `ASYNC_REPORTS_ENABLED=false`.
+
+```text
+ASYNC_REPORT_ATTEMPTS=3
+ASYNC_REPORT_BACKOFF_MS=1000
+ASYNC_REPORT_CONCURRENCY=2
+ASYNC_REPORT_DB_POOL_MAX=4
+```
+
+`ASYNC_REPORT_DB_POOL_MAX` limita o pool de cada instância BullMQ; o processo cria uma instância para a fila e outra para o worker.
+
+A chave pública precisa possuir a permissão `ANALISES_LEITURA`.
+
+1. Solicitar: `POST /api/v1/public/reports/async`
+
+```json
+{
+  "tipo": "COMPLETO",
+  "formato": "json"
+}
+```
+
+Tipos aceitos: `EFICIENCIA_OPERACIONAL`, `RENTABILIDADE`, `VIDA_UTIL_REMANESCENTE` e `COMPLETO`. Formatos aceitos: `json` e `csv`.
+
+A resposta usa `202` e contém o identificador da tarefa.
+
+2. Consultar: `GET /api/v1/public/reports/:id/status`
+3. Baixar: `GET /api/v1/public/reports/:id/download`
+
+Estados possíveis: `AGUARDANDO`, `PROCESSANDO`, `CONCLUIDA`, `FALHOU` e `CANCELADA`. Durante o intervalo entre retries, a tarefa volta para `AGUARDANDO`; `FALHOU` indica que as tentativas se esgotaram. São três tentativas por padrão, com backoff exponencial iniciado em um segundo. O parceiro só consulta tarefas registradas para ele e os arquivos são armazenados em `reports/`.
+
+## API pública e gestão de parceiros
+
+Autenticação: envie `X-API-Key: gc_live_...`.
+
+Endpoints públicos:
+
+| Método e rota | Permissão | Uso |
+| --- | --- | --- |
+| `GET /api/v1/public/health` | Nenhuma | Verifica API e banco. |
+| `GET /api/v1/public/equipment/:id/tracking` | `RASTREAMENTO_LEITURA` | Rastreamento somente da organização do parceiro. |
+| `GET /api/v1/public/lots` | `LOTES_LEITURA` | Lotes somente da organização do parceiro. |
+| `POST /api/v1/public/lots` | `LOTES_ESCRITA` | Cria lote para a organização do parceiro. |
+| `GET /api/v1/public/analyses` | `ANALISES_LEITURA` | Consulta resultados da organização do parceiro. |
+
+Gestão administrativa por usuário JWT:
+
+| Método e rota | Acesso | Uso |
+| --- | --- | --- |
+| `POST /api/v1/admin/partners` | Administrador | Corpo `nome` e `organizacaoId`. |
+| `POST /api/v1/admin/partners/:id/keys` | Administrador | Corpo `permissoes` e expiração opcional `expiraEm`. Retorna o segredo uma única vez. |
+| `GET /api/v1/admin/partners/:id/keys` | Administrador | Lista metadados das chaves, sem revelar o segredo. |
+| `POST /api/v1/admin/keys/:id/revoke` | Administrador | Revoga imediatamente uma chave ativa. |
+
+Exemplo de criação de chave:
+
+```json
+{
+  "permissoes": ["RASTREAMENTO_LEITURA", "ANALISES_LEITURA"],
+  "expiraEm": "2027-12-31T23:59:59.000Z"
+}
+```
+
+Guarde o campo `chave` da resposta. Ele não é recuperável novamente; crie uma nova chave quando necessário.
+
 ## Onde consultar a definição completa
 
 O OpenAPI em `GET /documentation/json` é a referência executável dos schemas e requisitos Bearer. Os detalhes de instalação, banco e variáveis ficam em [Instalação e configuração](INSTALACAO.md).

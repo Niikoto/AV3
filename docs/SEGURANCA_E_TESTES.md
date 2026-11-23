@@ -163,6 +163,12 @@ Pendências e decisões a confirmar: a importação de dados legados permanece o
 - A retenção de 180 dias não expira automaticamente: a política implementada é não remover journals. O teste verifica a rotação por tamanho, mas não a leitura dos arquivos rotacionados, a passagem do tempo, a conservação operacional ou a existência de backups.
 - O teste do histórico da CLI verifica que os dados salvos no repositório não ficam em texto puro. A filtragem de comandos com senha e a migração do arquivo legado são comportamentos documentados, mas não têm teste automatizado dedicado.
 - As credenciais ainda usam SHA-256 com salt para hash de senha. Conforme descrito acima, isso não equivale a uma função lenta de derivação de senha adequada a produção.
+- A API pública armazena apenas o hash SHA-256 das chaves. A resposta de criação mostra a chave completa uma única vez; o texto não é registrado nos logs.
+- Testes verificam chave ausente/inválida, permissão insuficiente, isolamento de organização e Rate Limit por chave.
+- A fila assíncrona usa o backend PostgreSQL do BullMQ no schema isolado `bullmq`; Redis não é necessário. O schema é inicializado pelo BullMQ quando a fila é ativada.
+- O teste de estabilidade do BullMQ usa schema temporário e valida retomada após reinício do worker, retry, falha permanente e 32 tarefas concorrentes; foi repetido cinco vezes sem falhas e remove o schema ao terminar.
+- O worker persiste tentativas e falhas no PostgreSQL e gera arquivos JSON/CSV em `reports/`. O armazenamento desses arquivos não possui política automática de expiração ou migração para armazenamento objeto.
+- Retries reutilizam IDs analíticos derivados da tarefa; repetir a execução atualiza o mesmo resultado em vez de criar novos registros históricos duplicados.
 
 ## Comandos principais
 

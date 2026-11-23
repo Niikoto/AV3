@@ -229,7 +229,10 @@ export class ServicoLotePrisma {
       if (atualizacaoEquipamentos.count !== lote.equipamentos.length) {
         throw new Error('Conflito ao processar os equipamentos do lote. Recarregue os dados e tente novamente.');
       }
-      await lotes.atualizar(loteId, { statusProcessamento: StatusLote.TRIAGEM_CONCLUIDA });
+      await lotes.atualizar(loteId, {
+        statusProcessamento: StatusLote.TRIAGEM_CONCLUIDA,
+        dataConclusaoTriagem: new Date(),
+      });
       await ServicoAuditoriaPrisma.registrarNaTransacao(tx, {
         operacao: 'CONCLUIR_TRIAGEM',
         entidade: 'lote',

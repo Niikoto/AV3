@@ -63,6 +63,34 @@ enum TipoEventoMovimentacao {
   ESTORNO
 }
 
+enum CategoriaAnalise {
+  EFICIENCIA_OPERACIONAL
+  RENTABILIDADE
+  VIDA_UTIL_REMANESCENTE
+}
+
+enum PermissaoApi {
+  RASTREAMENTO_LEITURA
+  LOTES_LEITURA
+  LOTES_ESCRITA
+  ANALISES_LEITURA
+}
+
+enum EstadoTarefa {
+  AGUARDANDO
+  PROCESSANDO
+  CONCLUIDA
+  FALHOU
+  CANCELADA
+}
+
+enum TipoRelatorioAsync {
+  EFICIENCIA_OPERACIONAL
+  RENTABILIDADE
+  VIDA_UTIL_REMANESCENTE
+  COMPLETO
+}
+
 model Organizacao {
   id                String     @id
   razaoSocial       String
@@ -80,6 +108,7 @@ model Organizacao {
   contratoVigente   Contrato?  @relation("ContratoVigente", fields: [id, contratoVigenteId], references: [organizacaoId, id], onDelete: Restrict)
   contratos         Contrato[] @relation("ContratosOrganizacao")
   lotes             Lote[]
+  parceirosApi      ParceiroApi[]
 
   @@unique([id, contratoVigenteId])
 }
@@ -105,6 +134,7 @@ model Contrato {
 model Lote {
   id                  String        @id
   dataEntrada         DateTime
+  dataConclusaoTriagem DateTime?
   organizacaoId       String
   notaFiscal          String
   transportadora      String
@@ -205,4 +235,71 @@ model TokenRevogado {
   expiraEm  DateTime
 
   @@index([expiraEm])
+}
+
+model ResultadoAnalise {
+  id             String           @id
+  categoria      CategoriaAnalise
+  organizacaoId  String?
+  periodoInicio  DateTime?
+  periodoFim     DateTime?
+  realizadaEm    DateTime         @default(now())
+  metodo         String
+  resultados     Json
+  observacoes    String[]
+
+  @@index([categoria, realizadaEm])
+  @@index([realizadaEm])
+  @@index([organizacaoId, realizadaEm])
+}
+
+model ParceiroApi {
+  id             String     @id
+  nome           String
+  organizacaoId  String
+  ativo          Boolean    @default(true)
+  criadoEm       DateTime   @default(now())
+  desativadoEm   DateTime?
+  organizacao    Organizacao @relation(fields: [organizacaoId], references: [id], onDelete: Restrict)
+  chaves         ChaveApi[]
+
+  @@unique([nome, organizacaoId])
+  @@index([organizacaoId, ativo])
+}
+
+model ChaveApi {
+  id             String       @id
+  parceiroId     String
+  prefixo        String
+  hashSecret     String       @unique
+  permissoes     PermissaoApi[]
+  ativa          Boolean      @default(true)
+  criadaEm       DateTime     @default(now())
+  expiraEm       DateTime?
+  revogadaEm     DateTime?
+  ultimoUsoEm    DateTime?
+  parceiro       ParceiroApi  @relation(fields: [parceiroId], references: [id], onDelete: Cascade)
+
+  @@index([parceiroId, ativa])
+  @@index([prefixo])
+}
+
+model TarefaRelatorio {
+  id            String             @id
+  parceiroId    String
+  chaveId       String
+  organizacaoId String
+  tipo          TipoRelatorioAsync
+  formato       String             @default("json")
+  estado        EstadoTarefa       @default(AGUARDANDO)
+  tentativas    Int                @default(0)
+  erro          String?
+  arquivoNome   String?
+  criadoEm      DateTime           @default(now())
+  iniciadoEm    DateTime?
+  concluidoEm   DateTime?
+
+  @@index([parceiroId, criadoEm])
+  @@index([organizacaoId, estado])
+  @@index([chaveId, criadoEm])
 }

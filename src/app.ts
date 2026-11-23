@@ -2,8 +2,10 @@ import Fastify from 'fastify';
 import fastifyJwt from '@fastify/jwt';
 import fastifySwagger from '@fastify/swagger';
 import fastifySwaggerUi from '@fastify/swagger-ui';
+import fastifyRateLimit from '@fastify/rate-limit';
 import type { PrismaClient } from './generated/prisma/client.js';
 import { registrarRotasApi } from './routes/api.js';
+import { registrarRotasPublicas } from './routes/publicApi.js';
 
 const descricoesRotas: Record<string, string> = {
   'GET /health': 'Verifica a disponibilidade da API e a conexão com o banco de dados.',
@@ -56,6 +58,11 @@ const descricoesRotas: Record<string, string> = {
   'GET /reports/organizations/:id': 'Gera um relatório da organização para o período informado.',
   'GET /reports/financial': 'Gera um relatório financeiro consolidado para o período informado.',
   'GET /reports/audit': 'Gera um relatório de eventos de auditoria para o período informado.',
+  'POST /analyses/efficiency': 'Executa e persiste a análise de eficiência operacional.',
+  'POST /analyses/profitability': 'Executa e persiste a análise de rentabilidade por categoria.',
+  'POST /analyses/remaining-life': 'Executa e persiste a estimativa preditiva de vida útil remanescente.',
+  'GET /analyses': 'Lista resultados analíticos anteriores.',
+  'GET /analyses/:id': 'Consulta um resultado analítico pelo identificador.',
 };
 
 const rotasSemConteudo = new Set([
@@ -181,6 +188,9 @@ export function criarAplicacao(
   });
 
   app.register(fastifyJwt, { secret: jwtSecret });
+  app.register(fastifyRateLimit, {
+    global: false,
+  });
   app.register(fastifySwagger, {
     openapi: {
       info: {
@@ -195,6 +205,12 @@ export function criarAplicacao(
             type: 'http',
             scheme: 'bearer',
             bearerFormat: 'JWT',
+          },
+          apiKeyAuth: {
+            type: 'apiKey',
+            in: 'header',
+            name: 'X-API-Key',
+            description: 'Chave secreta fornecida ao parceiro externo.',
           },
         },
         schemas: {
@@ -281,15 +297,24 @@ export function criarAplicacao(
         { name: 'Operations', description: 'Lotes, equipamentos, status e movimentações.' },
         { name: 'Global parameters', description: 'Parâmetros globais e histórico.' },
         { name: 'Reports', description: 'Relatórios operacionais, financeiros e de auditoria.' },
+        { name: 'Analyses', description: 'Análises operacionais, de rentabilidade e vida útil.' },
+        { name: 'Public API', description: 'Endpoints versionados para parceiros externos.' },
+        { name: 'API administration', description: 'Gestão administrativa de parceiros e chaves de API.' },
       ],
     },
     transform: ({ schema, url, route }) => {
       const method = Array.isArray(route.method) ? route.method[0] : route.method;
       const publicRoute = (method === 'GET' && url === '/health')
         || (method === 'POST' && url === '/auth/login');
+      const publicApiRoute = url.startsWith('/api/v1/public');
+      const publicApiHealthRoute = publicApiRoute && method === 'GET' && url.endsWith('/health');
       const initialCredentialRoute = method === 'POST' && url === '/auth/credentials';
       const tag = url === '/health'
         ? 'Health'
+        : url.startsWith('/api/v1/public')
+          ? 'Public API'
+          : url.startsWith('/api/v1/admin')
+            ? 'API administration'
         : url.startsWith('/auth/')
           ? 'Authentication'
           : url.startsWith('/organizations')
@@ -298,8 +323,14 @@ export function criarAplicacao(
               ? 'Operations'
               : url.startsWith('/global-parameters')
                 ? 'Global parameters'
-                : 'Reports';
-      const security: NonNullable<typeof schema.security> = publicRoute
+                : url.startsWith('/analyses')
+                  ? 'Analyses'
+                  : 'Reports';
+      const security: NonNullable<typeof schema.security> = publicApiHealthRoute
+        ? []
+        : publicApiRoute
+          ? [{ apiKeyAuth: [] }]
+          : publicRoute
         ? []
         : initialCredentialRoute
           ? [{}, { bearerAuth: [] }]
@@ -388,6 +419,7 @@ export function criarAplicacao(
   });
   app.register(async (api) => {
     registrarRotasApi(api, prisma, jwtExpiresIn);
+    registrarRotasPublicas(api, prisma);
 
     api.get('/health', async (_request, reply) => {
       try {
