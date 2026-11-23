@@ -63,6 +63,14 @@ enum TipoEventoMovimentacao {
   ESTORNO
 }
 
+enum TipoFalhaEquipamento {
+  FUNCIONAL
+  ELETRICA
+  MECANICA
+  DESGASTE
+  OUTRA
+}
+
 enum CategoriaAnalise {
   EFICIENCIA_OPERACIONAL
   RENTABILIDADE
@@ -167,9 +175,43 @@ model Equipamento {
   version             Int                @default(0)
   lote                Lote               @relation(fields: [loteId], references: [id], onDelete: Restrict)
   movimentacoes       Movimentacao[]
+  recuperacoes        RegistroRecuperacao[]
+  falhas              FalhaEquipamento[]
 
   @@unique([loteId, posicaoNoLote])
   @@index([loteId, statusRastreamento])
+}
+
+model RegistroRecuperacao {
+  id              String      @id
+  equipamentoId   String
+  material        String
+  valorRecuperado Decimal     @db.Decimal(12, 2)
+  moeda           String      @default("BRL") @db.VarChar(3)
+  dataRecuperacao DateTime
+  origem          String
+  observacao      String      @default("")
+  responsavel     String
+  criadoEm        DateTime    @default(now())
+  equipamento    Equipamento @relation(fields: [equipamentoId], references: [id], onDelete: Restrict)
+
+  @@index([equipamentoId, dataRecuperacao])
+  @@index([dataRecuperacao])
+}
+
+model FalhaEquipamento {
+  id            String              @id
+  equipamentoId String
+  tipo          TipoFalhaEquipamento
+  dataHora      DateTime
+  estadoFisico  EstadoFisico
+  descricao     String
+  responsavel   String
+  criadoEm      DateTime            @default(now())
+  equipamento  Equipamento         @relation(fields: [equipamentoId], references: [id], onDelete: Restrict)
+
+  @@index([equipamentoId, dataHora])
+  @@index([tipo, dataHora])
 }
 
 model Movimentacao {

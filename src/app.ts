@@ -43,6 +43,10 @@ const descricoesRotas: Record<string, string> = {
   'GET /equipment': 'Lista equipamentos com filtros opcionais, paginação e ordenação.',
   'GET /equipment/:id': 'Consulta os dados de um equipamento.',
   'GET /equipment/:id/tracking': 'Consulta o histórico de rastreamento e movimentações de um equipamento.',
+  'GET /equipment/:id/recoveries': 'Lista registros observados de recuperação de materiais do equipamento.',
+  'POST /equipment/:id/recoveries': 'Registra de forma auditável o valor recuperado de um material do equipamento.',
+  'GET /equipment/:id/failures': 'Lista eventos de falha registrados para o equipamento.',
+  'POST /equipment/:id/failures': 'Registra um evento histórico de falha do equipamento.',
   'PATCH /equipment/:id': 'Atualiza os dados cadastrais do equipamento mediante controle de versão.',
   'PATCH /equipment/:id/status': 'Atualiza a situação de rastreamento de um equipamento.',
   'PATCH /equipment/:id/physical-state': 'Atualiza o estado físico de um equipamento e registra uma justificativa opcional.',
@@ -93,6 +97,8 @@ const rotasDeCriacao = new Set([
   'POST /lots',
   'POST /lots/with-equipment',
   'POST /lots/:id/equipment',
+  'POST /equipment/:id/recoveries',
+  'POST /equipment/:id/failures',
 ]);
 
 const rotasDeLista = new Set([
@@ -120,6 +126,8 @@ const rotasDeConflito = new Set([
   'PATCH /equipment/:id/physical-state',
   'POST /equipment/:id/movements/corrections',
   'POST /equipment/:id/movements/reversals',
+  'POST /equipment/:id/recoveries',
+  'POST /equipment/:id/failures',
   'DELETE /equipment/:id',
 ]);
 

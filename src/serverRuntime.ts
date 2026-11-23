@@ -38,18 +38,33 @@ export async function iniciarServidorHttp(
     }
 
     const analises = new ServicoAnaliticoPrisma(prisma);
+    let executando = false;
     const tarefa = cron.schedule(expressao, async () => {
+      if (executando) {
+        app.log.warn('Execução agendada anterior ainda está em andamento; esta ocorrência foi ignorada.');
+        return;
+      }
+      executando = true;
       app.log.info('Executando análises agendadas.');
       try {
-        await analises.executarEficiencia();
-        await analises.executarRentabilidade();
-        await analises.executarVidaUtil();
+        const execucoes = [
+          ['eficiência', () => analises.executarEficiencia()],
+          ['rentabilidade', () => analises.executarRentabilidade()],
+          ['vida útil', () => analises.executarVidaUtil()],
+        ] as const;
+        for (const [categoria, executar] of execucoes) {
+          try {
+            await executar();
+          } catch (error) {
+            app.log.error(
+              { categoria, errorName: error instanceof Error ? error.name : 'UnknownError' },
+              'Falha ao executar uma categoria de análise agendada.',
+            );
+          }
+        }
         app.log.info('Análises agendadas concluídas.');
-      } catch (error) {
-        app.log.error(
-          { errorName: error instanceof Error ? error.name : 'UnknownError' },
-          'Falha ao executar análises agendadas.',
-        );
+      } finally {
+        executando = false;
       }
     });
     app.addHook('onClose', () => tarefa.stop());

@@ -216,6 +216,10 @@ Campos do objeto de equipamento: `id`, `codigoBarrasInterno`, `tipo`, `marca`, `
 | `GET /equipment` | Administrador, gestor de almoxarifado, auditor | Lista equipamentos. Filtros opcionais: `loteId`, `nome` (trecho da marca ou modelo, sem diferenciar maiúsculas/minúsculas), `status`, `estadoFisico` e `incluirCancelados`. Paginação: `pagina` (padrão 1) e `limite` (padrão 20, máximo 100). `ordenarPor` aceita `dataCadastro`, `marca`, `modelo` ou `statusRastreamento`; a ordenação é crescente. |
 | `GET /equipment/:id` | Administrador, gestor de almoxarifado, auditor | Consulta por ID ou código de barras interno. |
 | `GET /equipment/:id/tracking` | Administrador, gestor de almoxarifado, auditor | Retorna rastreabilidade, eventos e vínculos do equipamento. |
+| `GET /equipment/:id/recoveries` | Administrador, gestor de almoxarifado, auditor | Lista registros imutáveis de materiais e valores realmente recuperados, em ordem decrescente de data. |
+| `POST /equipment/:id/recoveries` | Administrador, gestor de almoxarifado | Registra `material`, `valorRecuperado` positivo com até duas casas decimais, `dataRecuperacao`, `origem`; `moeda` (padrão `BRL`) e `observacao` são opcionais. O responsável vem do usuário autenticado. Retorna `201`; grava auditoria na mesma transação. |
+| `GET /equipment/:id/failures` | Administrador, gestor de almoxarifado, auditor | Lista eventos históricos de falha e o estado físico observado em cada evento. |
+| `POST /equipment/:id/failures` | Administrador, gestor de almoxarifado | Registra `tipo`, `dataHora`, `estadoFisico` observado e `descricao`. O tipo aceita `FUNCIONAL`, `ELETRICA`, `MECANICA`, `DESGASTE` ou `OUTRA`; a data não pode ser futura. Retorna `201` e grava auditoria. |
 | `PATCH /equipment/:id` | Administrador, gestor de almoxarifado | Atualiza um ou mais campos de cadastro: `tipo`, `marca`, `modelo`, `anoFabricacao`, `pesoQuilogramas`. O corpo deve conter também a `version` atual retornada pela consulta; conflito de versão retorna `409`. |
 | `PATCH /equipment/:id/status` | Administrador, gestor de almoxarifado | Altera status. Corpo: `status`. A transição precisa obedecer ao fluxo operacional. Retorna `204`. |
 | `PATCH /equipment/:id/physical-state` | Administrador, gestor de almoxarifado | Altera estado físico. Corpo: `estadoFisico`; opcional `justificativa`. Retorna `204`. Alterações que indiquem piora relevante podem exigir justificativa. |
@@ -223,9 +227,20 @@ Campos do objeto de equipamento: `id`, `codigoBarrasInterno`, `tipo`, `marca`, `
 | `POST /equipment/:id/movements/corrections` | Administrador, gestor de almoxarifado | Corrige o destino de uma movimentação sem apagar o evento original. Corpo: `movimentacaoId`, `destino`, `justificativa`. Retorna `204`. |
 | `POST /equipment/:id/movements/reversals` | Administrador, gestor de almoxarifado | Estorna movimentação, mantendo o evento original. Corpo: `movimentacaoId`, `justificativa`. Retorna `204`. |
 | `POST /equipment/:id/cancel` | Administrador, gestor de almoxarifado | Cancela logicamente o equipamento. Corpo: `motivo`. Retorna `204`; mantém o registro e histórico, ocultando-o das listagens padrão. |
-| `DELETE /equipment/:id` | Administrador, gestor de almoxarifado | Exclui fisicamente o equipamento e suas movimentações e auditorias relacionadas. Corpo: `motivo` (obrigatório, não retido). Retorna `204`; se outro equipamento referenciar suas movimentações, retorna `409` sem excluir. |
+| `DELETE /equipment/:id` | Administrador, gestor de almoxarifado | Exclui fisicamente o equipamento e movimentações/auditorias relacionadas. Corpo: `motivo` (obrigatório, não retido). Retorna `204`; retorna conflito quando houver referência por outro equipamento ou histórico de recuperação/falhas. Para esses casos, use cancelamento lógico. |
 
-O status percorre, de acordo com as operações, triagem, espera por desmontagem, desmontagem, destino final (`PECAS_REAPROVEITADAS`, `MATERIAL_RECICLAVEL` ou `DESCARTE_SEGURO`) e baixa definitiva. `BAIXA_DEFINITIVA` é o encerramento do fluxo operacional, não uma exclusão. `POST /equipment/:id/cancel` preserva o registro e seu histórico. Já `DELETE /equipment/:id` apaga fisicamente o registro, as movimentações e as auditorias do equipamento; não mantém evento de exclusão.
+Exemplo de evento histórico de falha (o estado observado não altera automaticamente o estado atual do equipamento):
+
+```json
+{
+  "tipo": "ELETRICA",
+  "dataHora": "2026-11-18T15:30:00.000Z",
+  "estadoFisico": "DANIFICADO_LEVE",
+  "descricao": "Fonte não estabiliza a tensão"
+}
+```
+
+O status percorre, de acordo com as operações, triagem, espera por desmontagem, desmontagem, destino final (`PECAS_REAPROVEITADAS`, `MATERIAL_RECICLAVEL` ou `DESCARTE_SEGURO`) e baixa definitiva. `BAIXA_DEFINITIVA` é o encerramento do fluxo operacional, não uma exclusão. `POST /equipment/:id/cancel` preserva o registro e seu histórico. `DELETE /equipment/:id` apaga fisicamente apenas registros sem referências nem histórico analítico de recuperação/falhas.
 
 As relações com lotes e movimentações usam `onDelete: Restrict`. Para cumprir a exclusão física, a API remove primeiro as movimentações e suas referências internas dentro da mesma transação; se houver referência cruzada de outro equipamento, a operação é recusada para preservar a integridade.
 
@@ -293,6 +308,24 @@ As rotas de relatório retornam o conteúdo textual como corpo `text/plain`, nã
 - `estadoFisico`: `NOVO`, `BOM_ESTADO`, `USADO_LEVE`, `USADO_MODERADO`, `DANIFICADO_LEVE`, `DANIFICADO_GRAVE`, `INSERVIVEL`.
 - `status` de rastreamento: `AGUARDANDO_TRIAGEM`, `EM_TRIAGEM`, `AGUARDANDO_DESMONTE`, `EM_DESMONTE`, `PECAS_REAPROVEITADAS`, `MATERIAL_RECICLAVEL`, `DESCARTE_SEGURO`, `BAIXA_DEFINITIVA`.
 - `status` de lote: `RECEBIDO`, `EM_TRIAGEM`, `TRIAGEM_CONCLUIDA`, `ENCAMINHADO`, `FINALIZADO`.
+- `tipo` de falha: `FUNCIONAL`, `ELETRICA`, `MECANICA`, `DESGASTE`, `OUTRA`.
+
+Registros de recuperação e falha são históricos e não possuem rota de edição ou exclusão. As alterações ficam registradas na trilha de auditoria.
+
+Exemplo de registro observado de recuperação:
+
+```json
+{
+  "material": "Alumínio",
+  "valorRecuperado": 125.5,
+  "moeda": "BRL",
+  "dataRecuperacao": "2026-11-20T12:00:00.000Z",
+  "origem": "Venda de material reciclado",
+  "observacao": "Lote de componentes separado"
+}
+```
+
+Os resultados de `POST /analyses/profitability` passam a incluir, por categoria, `recuperacaoObservada` com totais e médias separados por moeda, além de `referenciaDepreciacaoMedia`. A referência de depreciação não representa dinheiro. Totais observados também não equivalem a lucro líquido, pois custos não são calculados.
 
 ## Relatórios assíncronos da API pública
 
@@ -338,7 +371,7 @@ Endpoints públicos:
 | `GET /api/v1/public/health` | Nenhuma | Verifica API e banco. |
 | `GET /api/v1/public/equipment/:id/tracking` | `RASTREAMENTO_LEITURA` | Rastreamento somente da organização do parceiro. |
 | `GET /api/v1/public/lots` | `LOTES_LEITURA` | Lotes somente da organização do parceiro. |
-| `POST /api/v1/public/lots` | `LOTES_ESCRITA` | Cria lote para a organização do parceiro. |
+| `POST /api/v1/public/lots` | `LOTES_ESCRITA` | Cria lote para a organização do parceiro; pode incluir opcionalmente `equipamentos` (1 a 500 itens), criando todos na mesma transação. O cliente não informa a organização no corpo: ela vem da chave. |
 | `GET /api/v1/public/analyses` | `ANALISES_LEITURA` | Consulta resultados da organização do parceiro. |
 
 Gestão administrativa por usuário JWT:
@@ -358,6 +391,31 @@ Exemplo de criação de chave:
   "expiraEm": "2027-12-31T23:59:59.000Z"
 }
 ```
+
+Exemplo de criação pública de lote com equipamentos (envie `X-API-Key`):
+
+```json
+{
+  "id": "LOTE-PARCEIRO-2026-001",
+  "dataEntrada": "2026-11-20T12:00:00.000Z",
+  "notaFiscal": "NF-001",
+  "transportadora": "Transportadora Exemplo",
+  "equipamentos": [
+    {
+      "id": "EQ-PARCEIRO-2026-001",
+      "codigoBarrasInterno": "BC-PARCEIRO-001",
+      "tipo": "NOTEBOOK",
+      "marca": "Exemplo",
+      "modelo": "Modelo A",
+      "anoFabricacao": 2022,
+      "estadoFisico": "USADO_LEVE",
+      "pesoQuilogramas": 2.1
+    }
+  ]
+}
+```
+
+O array `equipamentos` é opcional para manter compatibilidade com clientes que já criam somente o lote. Quando enviado, qualquer validação inválida cancela a operação inteira. O parceiro precisa ter `LOTES_ESCRITA`.
 
 Guarde o campo `chave` da resposta. Ele não é recuperável novamente; crie uma nova chave quando necessário.
 

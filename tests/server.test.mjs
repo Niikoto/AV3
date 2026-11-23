@@ -184,6 +184,8 @@ test('documentação OpenAPI descreve rotas, schemas de entrada e autenticação
     assert.ok(Object.keys(openApi.paths).length >= 30);
     assert.ok(openApi.paths['/auth/login'].post);
     assert.ok(openApi.paths['/organizations'].post.requestBody);
+    assert.ok(openApi.paths['/equipment/{id}/recoveries'].post.requestBody);
+    assert.ok(openApi.paths['/equipment/{id}/failures'].post.requestBody);
     assert.deepEqual(
       openApi.paths['/organizations'].post.requestBody.content['application/json'].schema.required,
       ['id', 'razaoSocial', 'cnpj', 'inscricaoEstadual', 'enderecoCompleto', 'telefone', 'email'],
@@ -227,6 +229,10 @@ test('documentação OpenAPI descreve rotas, schemas de entrada e autenticação
       openApi.paths['/api/v1/public/lots'].get.security,
       [{ apiKeyAuth: [] }],
     );
+    const publicLotSchema = openApi.paths['/api/v1/public/lots'].post.requestBody
+      .content['application/json'].schema;
+    assert.ok(publicLotSchema.properties.equipamentos);
+    assert.equal(publicLotSchema.properties.organizacaoId, undefined);
     assert.deepEqual(
       openApi.paths['/api/v1/public/reports/async'].post.security,
       [{ apiKeyAuth: [] }],
@@ -683,6 +689,8 @@ test('DELETE de equipamento remove o cadastro e retorna 204', async () => {
   const prisma = {
     $disconnect: async () => {},
     $transaction: async (callback) => callback(prisma),
+    registroRecuperacao: { count: async () => 0 },
+    falhaEquipamento: { count: async () => 0 },
     credencial: {
       findUnique: async ({ where }) => where.id === administrador.id ? administrador : null,
     },

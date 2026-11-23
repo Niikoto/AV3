@@ -503,6 +503,8 @@ test('cancelamento de equipamento preserva registro, vínculo e histórico de ev
   const auditoria = [];
   const prisma = {
     $transaction: async (operacao) => operacao(prisma),
+    registroRecuperacao: { count: async () => 0 },
+    falhaEquipamento: { count: async () => 0 },
     equipamento: {
       findUnique: async ({ where }) => where.id === equipamento.id ? equipamento : null,
       updateMany: async ({ where, data }) => {
@@ -585,6 +587,8 @@ test('exclusão física remove equipamento, movimentações e auditoria relacion
   const operacoes = [];
   const prisma = {
     $transaction: async (operacao) => operacao(prisma),
+    registroRecuperacao: { count: async () => 0 },
+    falhaEquipamento: { count: async () => 0 },
     equipamento: {
       findUnique: async ({ where }) => (
         where.id !== undefined
@@ -662,6 +666,8 @@ test('exclusão física recusa referências de movimentação vindas de outro eq
   let exclusoes = 0;
   const prisma = {
     $transaction: async (operacao) => operacao(prisma),
+    registroRecuperacao: { count: async () => 0 },
+    falhaEquipamento: { count: async () => 0 },
     equipamento: {
       findUnique: async ({ where }) => where.id === equipamento.id ? equipamento : null,
       delete: async () => {

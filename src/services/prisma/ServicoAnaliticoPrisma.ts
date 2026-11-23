@@ -18,6 +18,7 @@ export type ResultadoEficiencia = {
 export type ResultadoRentabilidade = {
   amostras: number;
   valorRecuperacaoEstimadoDisponivel: false;
+  valorRecuperacaoObservadoDisponivel: boolean;
   categorias: Array<{
     tipo: TipoEquipamento;
     marca: string;
@@ -25,6 +26,7 @@ export type ResultadoRentabilidade = {
     estadoFisico: EstadoFisico;
     amostras: number;
     referenciaDepreciacaoMedia: number | null;
+    recuperacaoObservada: Array<{ moeda: string; amostras: number; total: number; mediaPorRegistro: number }>;
   }>;
 };
 
@@ -34,6 +36,8 @@ export type ResultadoVidaUtil = {
     tipo: TipoEquipamento;
     amostrasHistoricas: number;
     metodo: 'REGRESSAO_LINEAR';
+    equipamentosHistoricos: number;
+    falhasObservadas: number;
     idadeRemanescenteAnos: number | null;
     dataEstimadaInservivel: string | null;
     estimativaConfiavel: boolean;
@@ -152,6 +156,12 @@ export class ServicoAnaliticoPrisma {
         estadoFisico: true,
         anoFabricacao: true,
         pesoQuilogramas: true,
+        recuperacoes: {
+          where: this.filtroPeriodo(periodo)
+            ? { dataRecuperacao: this.filtroPeriodo(periodo) }
+            : {},
+          select: { valorRecuperado: true, moeda: true },
+        },
       },
     });
 
@@ -167,6 +177,7 @@ export class ServicoAnaliticoPrisma {
       modelo: string;
       estadoFisico: EstadoFisico;
       referencias: number[];
+      recuperacoesPorMoeda: Map<string, number[]>;
     }>();
 
     for (const equipamento of equipamentos) {
@@ -177,15 +188,25 @@ export class ServicoAnaliticoPrisma {
         modelo: equipamento.modelo,
         estadoFisico: equipamento.estadoFisico,
         referencias: [],
+        recuperacoesPorMoeda: new Map<string, number[]>(),
       };
       const anos = Math.max(0, anoAtual - equipamento.anoFabricacao);
       grupo.referencias.push(equipamento.pesoQuilogramas * anos * coeficiente);
+      for (const recuperacao of equipamento.recuperacoes) {
+        const valores = grupo.recuperacoesPorMoeda.get(recuperacao.moeda) ?? [];
+        valores.push(Number(recuperacao.valorRecuperado));
+        grupo.recuperacoesPorMoeda.set(recuperacao.moeda, valores);
+      }
       grupos.set(chave, grupo);
     }
+
+    const temRecuperacaoObservada = Array.from(grupos.values())
+      .some((grupo) => grupo.recuperacoesPorMoeda.size > 0);
 
     const resultado: ResultadoRentabilidade = {
       amostras: equipamentos.length,
       valorRecuperacaoEstimadoDisponivel: false,
+      valorRecuperacaoObservadoDisponivel: temRecuperacaoObservada,
       categorias: Array.from(grupos.values()).map((grupo) => ({
         tipo: grupo.tipo,
         marca: grupo.marca,
@@ -193,17 +214,27 @@ export class ServicoAnaliticoPrisma {
         estadoFisico: grupo.estadoFisico,
         amostras: grupo.referencias.length,
         referenciaDepreciacaoMedia: calcularMedia(grupo.referencias),
+        recuperacaoObservada: Array.from(grupo.recuperacoesPorMoeda.entries())
+          .sort(([moedaA], [moedaB]) => moedaA.localeCompare(moedaB))
+          .map(([moeda, valores]) => ({
+            moeda,
+            amostras: valores.length,
+            total: Number(valores.reduce((soma, valor) => soma + valor, 0).toFixed(2)),
+            mediaPorRegistro: calcularMedia(valores) ?? 0,
+          })),
       })),
     };
 
     return this.persistir(
       CategoriaAnalise.RENTABILIDADE,
       periodo,
-      'AGRUPAMENTO_POR_TIPO_MARCA_MODELO_ESTADO_COM_REFERENCIA_DE_DEPRECIACAO',
+      'AGRUPAMENTO_POR_TIPO_MARCA_MODELO_ESTADO_COM_RECUPERACAO_OBSERVADA_E_REFERENCIA_DE_DEPRECIACAO',
       resultado,
       [
-        'O sistema não possui valor monetário real de recuperação nem marca/modelo com valor histórico.',
-        'A referência de depreciação não é apresentada como rentabilidade financeira garantida.',
+        temRecuperacaoObservada
+          ? 'Valores de recuperação são observações registradas; totais são separados por moeda e não representam lucro líquido.'
+          : 'Nenhum valor real de recuperação foi registrado no período; somente a referência de depreciação está disponível.',
+        'A referência de depreciação não é valor monetário nem rentabilidade financeira garantida.',
       ],
       idempotenciaId,
     );
@@ -215,6 +246,7 @@ export class ServicoAnaliticoPrisma {
       where: {
         cancelado: false,
         lote: {
+          cancelado: false,
           ...(periodo.organizacaoId ? { organizacaoId: periodo.organizacaoId } : {}),
           dataEntrada: this.filtroPeriodo(periodo),
         },
@@ -224,17 +256,44 @@ export class ServicoAnaliticoPrisma {
           where: { tipoEvento: 'ESTADO_FISICO' },
           orderBy: [{ dataHora: 'asc' }, { id: 'asc' }],
         },
+        falhas: {
+          where: { dataHora: { lte: periodo.fim ?? new Date() } },
+          orderBy: [{ dataHora: 'asc' }, { id: 'asc' }],
+          select: { dataHora: true, estadoFisico: true },
+        },
       },
     });
 
-    const grupos = new Map<TipoEquipamento, Array<{ x: number; y: number }>>();
+    const grupos = new Map<TipoEquipamento, Array<{ x: number; y: number; equipamentoId: string; falha: boolean }>>();
     for (const equipamento of equipamentos) {
       const pontos = grupos.get(equipamento.tipo) ?? [];
       for (const movimentacao of equipamento.movimentacoes) {
         if (!(movimentacao.destino in ordemEstado)) continue;
         const estado = movimentacao.destino as EstadoFisico;
         const idadeNaObservacao = movimentacao.dataHora.getFullYear() - equipamento.anoFabricacao;
-        pontos.push({ x: idadeNaObservacao, y: ordemEstado[estado] });
+        if (idadeNaObservacao >= 0) {
+          pontos.push({ x: idadeNaObservacao, y: ordemEstado[estado], equipamentoId: equipamento.id, falha: false });
+        }
+      }
+      for (const falha of equipamento.falhas) {
+        const idadeNaFalha = falha.dataHora.getFullYear() - equipamento.anoFabricacao;
+        if (idadeNaFalha >= 0) {
+          pontos.push({
+            x: idadeNaFalha,
+            y: ordemEstado[falha.estadoFisico],
+            equipamentoId: equipamento.id,
+            falha: true,
+          });
+        }
+      }
+      const idadeAtual = new Date().getFullYear() - equipamento.anoFabricacao;
+      if (idadeAtual >= 0) {
+        pontos.push({
+          x: idadeAtual,
+          y: ordemEstado[equipamento.estadoFisico],
+          equipamentoId: equipamento.id,
+          falha: false,
+        });
       }
       if (pontos.length > 0) grupos.set(equipamento.tipo, pontos);
     }
@@ -243,12 +302,21 @@ export class ServicoAnaliticoPrisma {
     for (const tipo of Array.from(grupos.keys()).sort()) {
       const pontos = grupos.get(tipo) ?? [];
       const regressao = calcularRegressaoLinear(pontos);
+      const idadeAtualPorEquipamento = new Map<string, number>();
+      for (const ponto of pontos) {
+        idadeAtualPorEquipamento.set(ponto.equipamentoId, Math.max(
+          idadeAtualPorEquipamento.get(ponto.equipamentoId) ?? 0,
+          ponto.x,
+        ));
+      }
+      const equipamentosHistoricos = idadeAtualPorEquipamento.size;
+      const idadeAtualMedia = equipamentosHistoricos === 0 ? 0
+        : Array.from(idadeAtualPorEquipamento.values()).reduce((total, idade) => total + idade, 0) / equipamentosHistoricos;
       let idadeRemanescenteAnos: number | null = null;
       let dataEstimadaInservivel: string | null = null;
       let estimativaConfiavel = false;
 
       if (regressao && regressao.inclinacao > 0) {
-        const idadeAtualMedia = pontos.reduce((total, ponto) => total + ponto.x, 0) / pontos.length;
         const idadeInservivel = (ordemEstado.INSERVIVEL - regressao.intercepto) / regressao.inclinacao;
         const remanescente = idadeInservivel - idadeAtualMedia;
         if (Number.isFinite(remanescente) && remanescente >= 0) {
@@ -256,7 +324,7 @@ export class ServicoAnaliticoPrisma {
           const data = new Date();
           data.setFullYear(data.getFullYear() + Math.ceil(remanescente));
           dataEstimadaInservivel = data.toISOString();
-          estimativaConfiavel = pontos.length >= 3;
+          estimativaConfiavel = equipamentosHistoricos >= 3;
         }
       }
 
@@ -264,6 +332,8 @@ export class ServicoAnaliticoPrisma {
         tipo,
         amostrasHistoricas: pontos.length,
         metodo: 'REGRESSAO_LINEAR',
+        equipamentosHistoricos,
+        falhasObservadas: pontos.filter((ponto) => ponto.falha).length,
         idadeRemanescenteAnos,
         dataEstimadaInservivel,
         estimativaConfiavel,
@@ -282,8 +352,8 @@ export class ServicoAnaliticoPrisma {
       resultado,
       [
         'Previsões são estimativas, não garantias.',
-        'Resultados só são produzidos com pelo menos dois pontos históricos distintos.',
-        'Nenhum dado histórico de falha foi encontrado no modelo atual.',
+        'A regressão usa estados físicos registrados e eventos de falha com o estado observado; estimativa confiável exige pelo menos três equipamentos distintos.',
+        'As observações repetidas do mesmo equipamento contribuem para a inclinação, mas não aumentam a contagem de equipamentos independentes.',
       ],
       idempotenciaId,
     );

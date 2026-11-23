@@ -59,11 +59,17 @@ ASYNC_REPORT_CONCURRENCY=2
 ASYNC_REPORT_DB_POOL_MAX=4
 PUBLIC_API_RATE_LIMIT_MAX=60
 PUBLIC_API_RATE_LIMIT_WINDOW="1 minute"
+ANALYTICAL_CRON_ENABLED=false
+ANALYTICAL_CRON="0 2 * * *"
 ```
 
 `DATABASE_URL` e `JWT_SECRET` são necessários para a API. `PORT` e `JWT_EXPIRES_IN` são opcionais. Não use o segredo de exemplo em produção.
 
 A fila assíncrona usa BullMQ com o backend PostgreSQL 13 ou superior, no schema `bullmq`. Ela inicia automaticamente quando `DATABASE_URL` está configurada. Na primeira inicialização, o BullMQ aplica suas migrações nesse schema; o usuário do banco precisa poder criar schemas, tabelas, funções e índices. Defina `ASYNC_REPORTS_ENABLED=false` para desativar os relatórios assíncronos. `ASYNC_REPORT_DB_POOL_MAX` limita conexões por instância BullMQ; cada processo da API abre uma instância de fila e uma de worker, além das conexões normais do Prisma. Redis e WSL não são necessários.
+
+O arquivo `prisma/create_database.sql` contém o DDL consolidado do schema atual para criação manual do banco. Para manter o histórico de migrações Prisma e atualizar uma instalação existente, valide o schema e aplique as migrações: `npm run db:migrate:dev` no ambiente de desenvolvimento ou `npx prisma migrate deploy` no ambiente de implantação. Não execute o DDL consolidado sobre um banco já criado pelas migrações.
+
+As análises periódicas são opcionais. Defina `ANALYTICAL_CRON_ENABLED=true` para habilitar o cron e ajuste `ANALYTICAL_CRON` com uma expressão aceita por `node-cron`; o padrão é diariamente às 02:00. Ao encerrar a API, o agendador é interrompido.
 
 ### Criar banco e iniciar o servidor
 

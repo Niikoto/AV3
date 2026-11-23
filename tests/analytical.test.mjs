@@ -50,6 +50,40 @@ test('reprocessamento do mesmo relatório atualiza o resultado analítico sem du
   assert.equal(resultados.get('TAREFA-1-EFICIENCIA').id, 'TAREFA-1-EFICIENCIA');
 });
 
+test('rentabilidade separa valores observados por moeda da referência de depreciação', async () => {
+  let persistido;
+  const prisma = {
+    equipamento: {
+      findMany: async () => [{
+        tipo: 'NOTEBOOK',
+        marca: 'Marca A',
+        modelo: 'Modelo 1',
+        estadoFisico: 'BOM_ESTADO',
+        anoFabricacao: new Date().getFullYear() - 2,
+        pesoQuilogramas: 2,
+        recuperacoes: [
+          { valorRecuperado: 25.5, moeda: 'BRL' },
+          { valorRecuperado: 10, moeda: 'BRL' },
+          { valorRecuperado: 7, moeda: 'USD' },
+        ],
+      }],
+    },
+    parametroGlobal: { findFirst: async () => ({ coeficienteDepreciacao: 0.08 }) },
+    resultadoAnalise: { create: async ({ data }) => { persistido = data; return data; } },
+  };
+
+  await new ServicoAnaliticoPrisma(prisma).executarRentabilidade();
+
+  const categoria = persistido.resultados.categorias[0];
+  assert.equal(persistido.resultados.valorRecuperacaoObservadoDisponivel, true);
+  assert.equal(persistido.resultados.valorRecuperacaoEstimadoDisponivel, false);
+  assert.deepEqual(categoria.recuperacaoObservada, [
+    { moeda: 'BRL', amostras: 2, total: 35.5, mediaPorRegistro: 17.75 },
+    { moeda: 'USD', amostras: 1, total: 7, mediaPorRegistro: 7 },
+  ]);
+  assert.equal(typeof categoria.referenciaDepreciacaoMedia, 'number');
+});
+
 test('chave pública é armazenada por hash e validada sem revelar segredo', async () => {
   let registroChave;
   const prisma = {

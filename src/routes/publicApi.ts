@@ -1,7 +1,7 @@
 import type { FastifyInstance, preHandlerHookHandler } from 'fastify';
 import fastifyRateLimit from '@fastify/rate-limit';
 import type { PrismaClient } from '../generated/prisma/client.js';
-import { PermissaoApi } from '../generated/prisma/enums.js';
+import { EstadoFisico, PermissaoApi, TipoEquipamento } from '../generated/prisma/enums.js';
 import { ServicoApiPublicaPrisma, type ContextoParceiro } from '../services/prisma/ServicoApiPublicaPrisma.js';
 import { ServicoAnaliticoPrisma } from '../services/prisma/ServicoAnaliticoPrisma.js';
 import { ServicoLotePrisma } from '../services/prisma/ServicoLotePrisma.js';
@@ -109,7 +109,13 @@ export function registrarRotasPublicas(app: FastifyInstance, prisma: PrismaClien
     });
 
     publica.post<{
-      Body: { id: string; dataEntrada: string; notaFiscal: string; transportadora: string; observacoes?: string };
+      Body: {
+        id: string; dataEntrada: string; notaFiscal: string; transportadora: string; observacoes?: string;
+        equipamentos?: Array<{
+          id: string; codigoBarrasInterno: string; tipo: TipoEquipamento; marca: string; modelo: string;
+          anoFabricacao: number; estadoFisico: EstadoFisico; pesoQuilogramas: number;
+        }>;
+      };
     }>('/api/v1/public/lots', {
       preHandler: autenticarChave,
       schema: {
@@ -123,6 +129,29 @@ export function registrarRotasPublicas(app: FastifyInstance, prisma: PrismaClien
             notaFiscal: { type: 'string', minLength: 1 },
             transportadora: { type: 'string', minLength: 1 },
             observacoes: { type: 'string' },
+            equipamentos: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 500,
+              items: {
+                type: 'object',
+                required: [
+                  'id', 'codigoBarrasInterno', 'tipo', 'marca', 'modelo',
+                  'anoFabricacao', 'estadoFisico', 'pesoQuilogramas',
+                ],
+                additionalProperties: false,
+                properties: {
+                  id: { type: 'string', minLength: 1, pattern: '\\S' },
+                  codigoBarrasInterno: { type: 'string', minLength: 1, pattern: '\\S' },
+                  tipo: { type: 'string', enum: Object.values(TipoEquipamento) },
+                  marca: { type: 'string', minLength: 1, pattern: '\\S' },
+                  modelo: { type: 'string', minLength: 1, pattern: '\\S' },
+                  anoFabricacao: { type: 'integer', minimum: 1900, maximum: new Date().getFullYear() },
+                  estadoFisico: { type: 'string', enum: Object.values(EstadoFisico) },
+                  pesoQuilogramas: { type: 'number', exclusiveMinimum: 0 },
+                },
+              },
+            },
           },
         },
       },
@@ -138,14 +167,18 @@ export function registrarRotasPublicas(app: FastifyInstance, prisma: PrismaClien
         });
       }
       try {
-        const lote = await lotes.criarLote({
+        const dadosLote = {
           id: request.body.id,
           dataEntrada: new Date(request.body.dataEntrada),
           organizacaoId: contexto.organizacaoId,
           notaFiscal: request.body.notaFiscal,
           transportadora: request.body.transportadora,
           observacoes: request.body.observacoes,
-        }, `parceiro:${contexto.parceiroId}`);
+        };
+        const responsavel = `parceiro:${contexto.parceiroId}`;
+        const lote = request.body.equipamentos
+          ? await lotes.criarLoteComEquipamentos(dadosLote, request.body.equipamentos, responsavel)
+          : await lotes.criarLote(dadosLote, responsavel);
         return reply.code(201).send(lote);
       } catch (error) {
         return reply.code(400).send({

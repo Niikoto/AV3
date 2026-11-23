@@ -555,6 +555,14 @@ export class ServicoEquipamentoPrisma {
         ?? await equipamentos.buscarPorCodigoBarras(id);
       if (!equipamento) throw new Error('Equipamento não encontrado por ID ou código de barras.');
 
+      const [totalRecuperacoes, totalFalhas] = await Promise.all([
+        tx.registroRecuperacao.count({ where: { equipamentoId: equipamento.id } }),
+        tx.falhaEquipamento.count({ where: { equipamentoId: equipamento.id } }),
+      ]);
+      if (totalRecuperacoes > 0 || totalFalhas > 0) {
+        throw new Error('Equipamento possui histórico analítico de recuperação ou falha; use cancelamento lógico para preservá-lo.');
+      }
+
       const movimentacoes = new MovimentacaoRepository(tx);
       const idsMovimentacoes = (await movimentacoes.listarIdsPorEquipamento(equipamento.id))
         .map((movimentacao) => movimentacao.id);

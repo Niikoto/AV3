@@ -8,6 +8,7 @@ import {
   PapelUsuario,
   StatusLote,
   StatusRastreamento,
+  TipoFalhaEquipamento,
   TipoEquipamento,
 } from '../generated/prisma/enums.js';
 import { ServicoAnaliticoPrisma } from '../services/prisma/ServicoAnaliticoPrisma.js';
@@ -18,6 +19,8 @@ import { ServicoOrganizacaoPrisma } from '../services/prisma/ServicoOrganizacaoP
 import { ServicoParametrosGlobaisPrisma } from '../services/prisma/ServicoParametrosGlobaisPrisma.js';
 import { ServicoRelatorioPrisma } from '../services/prisma/ServicoRelatorioPrisma.js';
 import { ServicoApiPublicaPrisma } from '../services/prisma/ServicoApiPublicaPrisma.js';
+import { ServicoRecuperacaoPrisma } from '../services/prisma/ServicoRecuperacaoPrisma.js';
+import { ServicoFalhaEquipamentoPrisma } from '../services/prisma/ServicoFalhaEquipamentoPrisma.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -76,6 +79,7 @@ type CampoExtra = {
   minimum?: number;
   maximum?: number;
   exclusiveMinimum?: number;
+  multipleOf?: number;
   minItems?: number;
   uniqueItems?: boolean;
 };
@@ -192,6 +196,8 @@ export function registrarRotasApi(
   const relatorios = new ServicoRelatorioPrisma(prisma);
   const analises = new ServicoAnaliticoPrisma(prisma);
   const apiPublica = new ServicoApiPublicaPrisma(prisma);
+  const recuperacoes = new ServicoRecuperacaoPrisma(prisma);
+  const falhas = new ServicoFalhaEquipamentoPrisma(prisma);
 
   const autenticar = async (request: FastifyRequest): Promise<void> => {
     try {
@@ -765,6 +771,63 @@ export function registrarRotasApi(
     schema: schemaParamsId,
     preHandler: comPermissao(leituraOperacional),
   }, async (request) => executar(() => equipamentos.rastrearEquipamento(request.params.id)));
+
+  app.get<{ Params: IdentificadorParams }>('/equipment/:id/recoveries', {
+    schema: schemaParamsId,
+    preHandler: comPermissao(leituraOperacional),
+  }, async (request) => executar(() => recuperacoes.listar(request.params.id)));
+
+  app.post<{ Params: IdentificadorParams; Body: {
+    material: string; valorRecuperado: number; moeda?: string; dataRecuperacao: string;
+    origem: string; observacao?: string;
+  } }>('/equipment/:id/recoveries', {
+    schema: {
+      ...schemaParamsId,
+      ...schemaBody(['material', 'valorRecuperado', 'dataRecuperacao', 'origem'], {
+        material: schemaNaoVazio,
+        valorRecuperado: { type: 'number', exclusiveMinimum: 0, maximum: 9_999_999_999.99, multipleOf: 0.01 },
+        moeda: { type: 'string', pattern: '^[A-Za-z]{3}$' },
+        dataRecuperacao: schemaData,
+        origem: schemaNaoVazio,
+        observacao: schemaString,
+      }),
+    },
+    preHandler: comPermissao(almoxarifado),
+  }, async (request, reply) => {
+    const registro = await executar(() => recuperacoes.registrar(
+      request.params.id,
+      { ...request.body, dataRecuperacao: new Date(request.body.dataRecuperacao) },
+      responsavel(request),
+    ));
+    return reply.code(201).send(registro);
+  });
+
+  app.get<{ Params: IdentificadorParams }>('/equipment/:id/failures', {
+    schema: schemaParamsId,
+    preHandler: comPermissao(leituraOperacional),
+  }, async (request) => executar(() => falhas.listar(request.params.id)));
+
+  app.post<{ Params: IdentificadorParams; Body: {
+    tipo: TipoFalhaEquipamento; dataHora: string; estadoFisico: EstadoFisico; descricao: string;
+  } }>('/equipment/:id/failures', {
+    schema: {
+      ...schemaParamsId,
+      ...schemaBody(['tipo', 'dataHora', 'estadoFisico', 'descricao'], {
+        tipo: schemaEnum(TipoFalhaEquipamento),
+        dataHora: schemaData,
+        estadoFisico: schemaEnum(EstadoFisico),
+        descricao: schemaNaoVazio,
+      }),
+    },
+    preHandler: comPermissao(almoxarifado),
+  }, async (request, reply) => {
+    const falha = await executar(() => falhas.registrar(
+      request.params.id,
+      { ...request.body, dataHora: new Date(request.body.dataHora) },
+      responsavel(request),
+    ));
+    return reply.code(201).send(falha);
+  });
 
   app.patch<{ Params: IdentificadorParams; Body: {
     version: number;
