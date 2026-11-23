@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { PrismaClient } from '../../generated/prisma/client.js';
+import { TipoRegistroRecuperacao } from '../../generated/prisma/enums.js';
 import { ServicoAuditoriaPrisma } from './ServicoAuditoriaPrisma.js';
 
 export type DadosRecuperacao = {
+  tipo?: TipoRegistroRecuperacao;
   material: string;
   valorRecuperado: number;
   moeda?: string;
@@ -42,6 +44,7 @@ export class ServicoRecuperacaoPrisma {
         data: {
           id: randomUUID(),
           equipamentoId,
+          tipo: dados.tipo ?? TipoRegistroRecuperacao.REALIZADO,
           material,
           valorRecuperado: dados.valorRecuperado,
           moeda,
@@ -57,6 +60,7 @@ export class ServicoRecuperacaoPrisma {
         dadosDepois: {
           id: registro.id,
           equipamentoId,
+          tipo: registro.tipo,
           material: registro.material,
           valorRecuperado: registro.valorRecuperado.toString(),
           moeda: registro.moeda,

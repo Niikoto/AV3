@@ -52,11 +52,16 @@ DATABASE_URL=postgresql://usuario:senha@localhost:5432/greencode?schema=public
 JWT_SECRET=use-um-segredo-proprio-com-pelo-menos-32-caracteres
 PORT=3000
 JWT_EXPIRES_IN=30m
+PASSWORD_BCRYPT_COST=12
 ASYNC_REPORTS_ENABLED=true
 ASYNC_REPORT_ATTEMPTS=3
 ASYNC_REPORT_BACKOFF_MS=1000
 ASYNC_REPORT_CONCURRENCY=2
 ASYNC_REPORT_DB_POOL_MAX=4
+ASYNC_REPORT_COMPLETED_RETENTION_HOURS=24
+ASYNC_REPORT_MAX_RETAINED_COMPLETED=500
+ASYNC_REPORT_FAILED_RETENTION_DAYS=7
+ASYNC_REPORT_MAX_RETAINED_FAILED=100
 PUBLIC_API_RATE_LIMIT_MAX=60
 PUBLIC_API_RATE_LIMIT_WINDOW="1 minute"
 ANALYTICAL_CRON_ENABLED=false
@@ -65,7 +70,11 @@ ANALYTICAL_CRON="0 2 * * *"
 
 `DATABASE_URL` e `JWT_SECRET` são necessários para a API. `PORT` e `JWT_EXPIRES_IN` são opcionais. Não use o segredo de exemplo em produção.
 
+Novas senhas são armazenadas com bcrypt. `PASSWORD_BCRYPT_COST` define o custo (10 a 15; padrão 12). Credenciais antigas com SHA-256 e salt são convertidas para bcrypt após o primeiro login válido.
+
 A fila assíncrona usa BullMQ com o backend PostgreSQL 13 ou superior, no schema `bullmq`. Ela inicia automaticamente quando `DATABASE_URL` está configurada. Na primeira inicialização, o BullMQ aplica suas migrações nesse schema; o usuário do banco precisa poder criar schemas, tabelas, funções e índices. Defina `ASYNC_REPORTS_ENABLED=false` para desativar os relatórios assíncronos. `ASYNC_REPORT_DB_POOL_MAX` limita conexões por instância BullMQ; cada processo da API abre uma instância de fila e uma de worker, além das conexões normais do Prisma. Redis e WSL não são necessários.
+
+Tarefas concluídas são mantidas por até 24 horas e jobs em falha por até sete dias, com limites de quantidade configuráveis pelas variáveis `ASYNC_REPORT_*_RETENTION_*` e `ASYNC_REPORT_MAX_RETAINED_*`. A limpeza remove os arquivos temporários de relatório e as tarefas expiradas; snapshots em `ResultadoAnalise` permanecem no banco.
 
 O arquivo `prisma/create_database.sql` contém o DDL consolidado do schema atual para criação manual do banco. Para manter o histórico de migrações Prisma e atualizar uma instalação existente, valide o schema e aplique as migrações: `npm run db:migrate:dev` no ambiente de desenvolvimento ou `npx prisma migrate deploy` no ambiente de implantação. Não execute o DDL consolidado sobre um banco já criado pelas migrações.
 

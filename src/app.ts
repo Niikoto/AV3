@@ -9,6 +9,9 @@ import { registrarRotasPublicas } from './routes/publicApi.js';
 
 const descricoesRotas: Record<string, string> = {
   'GET /health': 'Verifica a disponibilidade da API e a conexão com o banco de dados.',
+  'POST /api/v1/public/analyses/efficiency': 'Calcula e persiste snapshot de eficiência da organização vinculada à chave.',
+  'POST /api/v1/public/analyses/profitability': 'Calcula e persiste snapshot de recuperação e referência de depreciação da organização vinculada à chave.',
+  'POST /api/v1/public/analyses/remaining-life': 'Calcula e persiste snapshot de vida útil remanescente da organização vinculada à chave.',
   'POST /auth/login': 'Autentica um usuário e retorna um token de acesso Bearer.',
   'POST /auth/logout': 'Encerra a sessão atual revogando o token de acesso.',
   'POST /auth/credentials': 'Cria uma credencial de acesso; na configuração inicial, permite criar a primeira conta administrativa.',
@@ -99,6 +102,9 @@ const rotasDeCriacao = new Set([
   'POST /lots/:id/equipment',
   'POST /equipment/:id/recoveries',
   'POST /equipment/:id/failures',
+  'POST /api/v1/public/analyses/efficiency',
+  'POST /api/v1/public/analyses/profitability',
+  'POST /api/v1/public/analyses/remaining-life',
 ]);
 
 const rotasDeLista = new Set([

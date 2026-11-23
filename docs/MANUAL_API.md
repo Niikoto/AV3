@@ -23,6 +23,8 @@ Papéis e escopo geral:
 
 O cadastro inicial sem token só funciona quando não há credenciais, e deve criar um `ADMINISTRADOR`. Depois disso, somente administrador pode criar outras contas.
 
+As novas senhas usam bcrypt com custo padrão 12, configurável por `PASSWORD_BCRYPT_COST`. Credenciais antigas com hash SHA-256 e salt são convertidas para bcrypt após autenticação válida.
+
 ## Formatos e respostas comuns
 
 - Datas são strings ISO 8601, por exemplo `2026-10-24T12:00:00.000Z`.
@@ -217,7 +219,7 @@ Campos do objeto de equipamento: `id`, `codigoBarrasInterno`, `tipo`, `marca`, `
 | `GET /equipment/:id` | Administrador, gestor de almoxarifado, auditor | Consulta por ID ou código de barras interno. |
 | `GET /equipment/:id/tracking` | Administrador, gestor de almoxarifado, auditor | Retorna rastreabilidade, eventos e vínculos do equipamento. |
 | `GET /equipment/:id/recoveries` | Administrador, gestor de almoxarifado, auditor | Lista registros imutáveis de materiais e valores realmente recuperados, em ordem decrescente de data. |
-| `POST /equipment/:id/recoveries` | Administrador, gestor de almoxarifado | Registra `material`, `valorRecuperado` positivo com até duas casas decimais, `dataRecuperacao`, `origem`; `moeda` (padrão `BRL`) e `observacao` são opcionais. O responsável vem do usuário autenticado. Retorna `201`; grava auditoria na mesma transação. |
+| `POST /equipment/:id/recoveries` | Administrador, gestor de almoxarifado | Registra `material`, `valorRecuperado` positivo com até duas casas decimais, `dataRecuperacao`, `origem`; `tipo` (`ESTIMADO` ou `REALIZADO`, padrão `REALIZADO`), `moeda` (padrão `BRL`) e `observacao` são opcionais. O responsável vem do usuário autenticado. Retorna `201`; grava auditoria na mesma transação. |
 | `GET /equipment/:id/failures` | Administrador, gestor de almoxarifado, auditor | Lista eventos históricos de falha e o estado físico observado em cada evento. |
 | `POST /equipment/:id/failures` | Administrador, gestor de almoxarifado | Registra `tipo`, `dataHora`, `estadoFisico` observado e `descricao`. O tipo aceita `FUNCIONAL`, `ELETRICA`, `MECANICA`, `DESGASTE` ou `OUTRA`; a data não pode ser futura. Retorna `201` e grava auditoria. |
 | `PATCH /equipment/:id` | Administrador, gestor de almoxarifado | Atualiza um ou mais campos de cadastro: `tipo`, `marca`, `modelo`, `anoFabricacao`, `pesoQuilogramas`. O corpo deve conter também a `version` atual retornada pela consulta; conflito de versão retorna `409`. |
@@ -308,6 +310,7 @@ As rotas de relatório retornam o conteúdo textual como corpo `text/plain`, nã
 - `estadoFisico`: `NOVO`, `BOM_ESTADO`, `USADO_LEVE`, `USADO_MODERADO`, `DANIFICADO_LEVE`, `DANIFICADO_GRAVE`, `INSERVIVEL`.
 - `status` de rastreamento: `AGUARDANDO_TRIAGEM`, `EM_TRIAGEM`, `AGUARDANDO_DESMONTE`, `EM_DESMONTE`, `PECAS_REAPROVEITADAS`, `MATERIAL_RECICLAVEL`, `DESCARTE_SEGURO`, `BAIXA_DEFINITIVA`.
 - `status` de lote: `RECEBIDO`, `EM_TRIAGEM`, `TRIAGEM_CONCLUIDA`, `ENCAMINHADO`, `FINALIZADO`.
+- `tipo` de recuperação: `ESTIMADO`, `REALIZADO` (padrão `REALIZADO`).
 - `tipo` de falha: `FUNCIONAL`, `ELETRICA`, `MECANICA`, `DESGASTE`, `OUTRA`.
 
 Registros de recuperação e falha são históricos e não possuem rota de edição ou exclusão. As alterações ficam registradas na trilha de auditoria.
@@ -317,6 +320,7 @@ Exemplo de registro observado de recuperação:
 ```json
 {
   "material": "Alumínio",
+  "tipo": "REALIZADO",
   "valorRecuperado": 125.5,
   "moeda": "BRL",
   "dataRecuperacao": "2026-11-20T12:00:00.000Z",
@@ -325,7 +329,28 @@ Exemplo de registro observado de recuperação:
 }
 ```
 
-Os resultados de `POST /analyses/profitability` passam a incluir, por categoria, `recuperacaoObservada` com totais e médias separados por moeda, além de `referenciaDepreciacaoMedia`. A referência de depreciação não representa dinheiro. Totais observados também não equivalem a lucro líquido, pois custos não são calculados.
+Os resultados de `POST /analyses/profitability` incluem, por categoria, `recuperacaoEstimada` e `recuperacaoObservada`, cada uma com totais e médias separados por moeda, além de `referenciaDepreciacaoMedia`. Avaliações estimadas são informadas por usuários e não calculadas pelo sistema. A referência de depreciação não representa dinheiro. Totais observados também não equivalem a lucro líquido, pois custos não são calculados.
+
+## Análises síncronas para parceiros
+
+As chamadas exigem `X-API-Key` com permissão `ANALISES_LEITURA`. Cada solicitação cria um snapshot persistido e retorna `201`. A organização usada é sempre a vinculada à chave.
+
+| Método e rota | Corpo | Resultado |
+| --- | --- | --- |
+| `POST /api/v1/public/analyses/efficiency` | `inicio`, `fim` (datas ISO 8601 obrigatórias) | Média e mediana globais, por organização, operador e mês. O agrupamento mensal usa o mês de conclusão da triagem; o período filtra pela data de entrada do lote. |
+| `POST /api/v1/public/analyses/profitability` | `inicio`, `fim` (datas ISO 8601 obrigatórias) | Valores estimados e realizados separados por categoria e moeda, além da referência de depreciação. |
+| `POST /api/v1/public/analyses/remaining-life` | `{}` ou `inicio` e `fim` opcionais | Estimativa de vida útil baseada no histórico da organização. |
+
+Exemplo de eficiência:
+
+```json
+{
+  "inicio": "2026-01-01T00:00:00.000Z",
+  "fim": "2026-12-31T23:59:59.999Z"
+}
+```
+
+O resultado inclui o identificador e a data do snapshot. Os limites de chamadas são aplicados por chave, conforme `PUBLIC_API_RATE_LIMIT_MAX` e `PUBLIC_API_RATE_LIMIT_WINDOW`.
 
 ## Relatórios assíncronos da API pública
 
@@ -339,6 +364,8 @@ ASYNC_REPORT_DB_POOL_MAX=4
 ```
 
 `ASYNC_REPORT_DB_POOL_MAX` limita o pool de cada instância BullMQ; o processo cria uma instância para a fila e outra para o worker.
+
+Tarefas concluídas expiram após 24 horas e tarefas com falha após sete dias, por padrão. A limpeza apaga o registro da tarefa e o arquivo baixável; snapshots analíticos permanecem disponíveis em `ResultadoAnalise`. Consulte as variáveis de retenção no manual de instalação.
 
 A chave pública precisa possuir a permissão `ANALISES_LEITURA`.
 
@@ -373,6 +400,9 @@ Endpoints públicos:
 | `GET /api/v1/public/lots` | `LOTES_LEITURA` | Lotes somente da organização do parceiro. |
 | `POST /api/v1/public/lots` | `LOTES_ESCRITA` | Cria lote para a organização do parceiro; pode incluir opcionalmente `equipamentos` (1 a 500 itens), criando todos na mesma transação. O cliente não informa a organização no corpo: ela vem da chave. |
 | `GET /api/v1/public/analyses` | `ANALISES_LEITURA` | Consulta resultados da organização do parceiro. |
+| `POST /api/v1/public/analyses/efficiency` | `ANALISES_LEITURA` | Calcula eficiência e persiste um snapshot. Exige período. |
+| `POST /api/v1/public/analyses/profitability` | `ANALISES_LEITURA` | Calcula valores estimados/realizados e persiste um snapshot. Exige período. |
+| `POST /api/v1/public/analyses/remaining-life` | `ANALISES_LEITURA` | Calcula vida útil e persiste um snapshot. Período opcional. |
 
 Gestão administrativa por usuário JWT:
 

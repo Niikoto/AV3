@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Prisma, PrismaClient } from '../../generated/prisma/client.js';
-import { CategoriaAnalise, EstadoFisico, TipoEquipamento } from '../../generated/prisma/enums.js';
+import { CategoriaAnalise, EstadoFisico, TipoEquipamento, TipoRegistroRecuperacao } from '../../generated/prisma/enums.js';
 
 export type PeriodoAnalise = {
   inicio?: Date;
@@ -11,13 +11,15 @@ export type PeriodoAnalise = {
 export type ResultadoEficiencia = {
   amostras: number;
   tempoMedioHoras: number | null;
-  porOrganizacao: Array<{ organizacaoId: string; amostras: number; tempoMedioHoras: number | null }>;
-  porOperador: Array<{ operador: string; amostras: number; tempoMedioHoras: number | null }>;
+  tempoMedianoHoras: number | null;
+  porOrganizacao: Array<{ organizacaoId: string; amostras: number; tempoMedioHoras: number | null; tempoMedianoHoras: number | null }>;
+  porOperador: Array<{ operador: string; amostras: number; tempoMedioHoras: number | null; tempoMedianoHoras: number | null }>;
+  porMes: Array<{ mes: string; amostras: number; tempoMedioHoras: number | null; tempoMedianoHoras: number | null }>;
 };
 
 export type ResultadoRentabilidade = {
   amostras: number;
-  valorRecuperacaoEstimadoDisponivel: false;
+  valorRecuperacaoEstimadoDisponivel: boolean;
   valorRecuperacaoObservadoDisponivel: boolean;
   categorias: Array<{
     tipo: TipoEquipamento;
@@ -26,6 +28,7 @@ export type ResultadoRentabilidade = {
     estadoFisico: EstadoFisico;
     amostras: number;
     referenciaDepreciacaoMedia: number | null;
+    recuperacaoEstimada: Array<{ moeda: string; amostras: number; total: number; mediaPorRegistro: number }>;
     recuperacaoObservada: Array<{ moeda: string; amostras: number; total: number; mediaPorRegistro: number }>;
   }>;
 };
@@ -57,6 +60,16 @@ const ordemEstado: Record<EstadoFisico, number> = {
 export function calcularMedia(valores: number[]): number | null {
   if (valores.length === 0) return null;
   return Number((valores.reduce((total, valor) => total + valor, 0) / valores.length).toFixed(2));
+}
+
+export function calcularMediana(valores: number[]): number | null {
+  if (valores.length === 0) return null;
+  const ordenados = [...valores].sort((a, b) => a - b);
+  const meio = Math.floor(ordenados.length / 2);
+  const mediana = ordenados.length % 2 === 0
+    ? (ordenados[meio - 1]! + ordenados[meio]!) / 2
+    : ordenados[meio]!;
+  return Number(mediana.toFixed(2));
 }
 
 export function calcularRegressaoLinear(pontos: Array<{ x: number; y: number }>): {
@@ -108,19 +121,35 @@ export class ServicoAnaliticoPrisma {
       }];
     }));
     const porOperador = this.agrupar(operadores);
+    const porMes = this.agrupar(lotes.flatMap((lote) => {
+      if (!lote.dataConclusaoTriagem) return [];
+      return [{
+        chave: lote.dataConclusaoTriagem.toISOString().slice(0, 7),
+        valor: Math.max(0, (lote.dataConclusaoTriagem.getTime() - lote.dataEntrada.getTime()) / 3_600_000),
+      }];
+    }));
 
     const resultado: ResultadoEficiencia = {
       amostras: lotes.length,
       tempoMedioHoras: calcularMedia(duracoes),
+      tempoMedianoHoras: calcularMediana(duracoes),
       porOrganizacao: porOrganizacao.map((item) => ({
         organizacaoId: item.chave,
         amostras: item.valores.length,
         tempoMedioHoras: calcularMedia(item.valores),
+        tempoMedianoHoras: calcularMediana(item.valores),
       })),
       porOperador: porOperador.map((item) => ({
         operador: item.chave,
         amostras: item.valores.length,
         tempoMedioHoras: calcularMedia(item.valores),
+        tempoMedianoHoras: calcularMediana(item.valores),
+      })),
+      porMes: porMes.map((item) => ({
+        mes: item.chave,
+        amostras: item.valores.length,
+        tempoMedioHoras: calcularMedia(item.valores),
+        tempoMedianoHoras: calcularMediana(item.valores),
       })),
     };
 
@@ -131,7 +160,8 @@ export class ServicoAnaliticoPrisma {
       resultado,
       resultado.amostras === 0
         ? ['Nenhum lote possui data de entrada e conclusão de triagem no período selecionado.']
-        : ['Tempo calculado em horas; lotes sem conclusão ou cancelados foram excluídos.',
+        : ['Tempo calculado em horas entre entrada e conclusão; lotes sem conclusão ou cancelados foram excluídos.',
+          'O agrupamento mensal usa o mês da conclusão da triagem; o filtro de período continua aplicado à data de entrada do lote.',
           'Comparação por operador disponível apenas para eventos de conclusão registrados na auditoria.',
         ],
       idempotenciaId,
@@ -160,7 +190,7 @@ export class ServicoAnaliticoPrisma {
           where: this.filtroPeriodo(periodo)
             ? { dataRecuperacao: this.filtroPeriodo(periodo) }
             : {},
-          select: { valorRecuperado: true, moeda: true },
+          select: { tipo: true, valorRecuperado: true, moeda: true },
         },
       },
     });
@@ -177,7 +207,7 @@ export class ServicoAnaliticoPrisma {
       modelo: string;
       estadoFisico: EstadoFisico;
       referencias: number[];
-      recuperacoesPorMoeda: Map<string, number[]>;
+      recuperacoesPorTipoEMoeda: Map<TipoRegistroRecuperacao, Map<string, number[]>>;
     }>();
 
     for (const equipamento of equipamentos) {
@@ -188,24 +218,28 @@ export class ServicoAnaliticoPrisma {
         modelo: equipamento.modelo,
         estadoFisico: equipamento.estadoFisico,
         referencias: [],
-        recuperacoesPorMoeda: new Map<string, number[]>(),
+        recuperacoesPorTipoEMoeda: new Map<TipoRegistroRecuperacao, Map<string, number[]>>(),
       };
       const anos = Math.max(0, anoAtual - equipamento.anoFabricacao);
       grupo.referencias.push(equipamento.pesoQuilogramas * anos * coeficiente);
       for (const recuperacao of equipamento.recuperacoes) {
-        const valores = grupo.recuperacoesPorMoeda.get(recuperacao.moeda) ?? [];
+        const porMoeda = grupo.recuperacoesPorTipoEMoeda.get(recuperacao.tipo) ?? new Map<string, number[]>();
+        const valores = porMoeda.get(recuperacao.moeda) ?? [];
         valores.push(Number(recuperacao.valorRecuperado));
-        grupo.recuperacoesPorMoeda.set(recuperacao.moeda, valores);
+        porMoeda.set(recuperacao.moeda, valores);
+        grupo.recuperacoesPorTipoEMoeda.set(recuperacao.tipo, porMoeda);
       }
       grupos.set(chave, grupo);
     }
 
     const temRecuperacaoObservada = Array.from(grupos.values())
-      .some((grupo) => grupo.recuperacoesPorMoeda.size > 0);
+      .some((grupo) => grupo.recuperacoesPorTipoEMoeda.has(TipoRegistroRecuperacao.REALIZADO));
+    const temRecuperacaoEstimada = Array.from(grupos.values())
+      .some((grupo) => grupo.recuperacoesPorTipoEMoeda.has(TipoRegistroRecuperacao.ESTIMADO));
 
     const resultado: ResultadoRentabilidade = {
       amostras: equipamentos.length,
-      valorRecuperacaoEstimadoDisponivel: false,
+      valorRecuperacaoEstimadoDisponivel: temRecuperacaoEstimada,
       valorRecuperacaoObservadoDisponivel: temRecuperacaoObservada,
       categorias: Array.from(grupos.values()).map((grupo) => ({
         tipo: grupo.tipo,
@@ -214,30 +248,38 @@ export class ServicoAnaliticoPrisma {
         estadoFisico: grupo.estadoFisico,
         amostras: grupo.referencias.length,
         referenciaDepreciacaoMedia: calcularMedia(grupo.referencias),
-        recuperacaoObservada: Array.from(grupo.recuperacoesPorMoeda.entries())
-          .sort(([moedaA], [moedaB]) => moedaA.localeCompare(moedaB))
-          .map(([moeda, valores]) => ({
-            moeda,
-            amostras: valores.length,
-            total: Number(valores.reduce((soma, valor) => soma + valor, 0).toFixed(2)),
-            mediaPorRegistro: calcularMedia(valores) ?? 0,
-          })),
+        recuperacaoEstimada: this.resumirRecuperacoes(grupo.recuperacoesPorTipoEMoeda.get(TipoRegistroRecuperacao.ESTIMADO)),
+        recuperacaoObservada: this.resumirRecuperacoes(grupo.recuperacoesPorTipoEMoeda.get(TipoRegistroRecuperacao.REALIZADO)),
       })),
     };
 
     return this.persistir(
       CategoriaAnalise.RENTABILIDADE,
       periodo,
-      'AGRUPAMENTO_POR_TIPO_MARCA_MODELO_ESTADO_COM_RECUPERACAO_OBSERVADA_E_REFERENCIA_DE_DEPRECIACAO',
+      'AGRUPAMENTO_POR_TIPO_MARCA_MODELO_ESTADO_COM_AVALIACOES_ESTIMADAS_E_REALIZADAS_E_REFERENCIA_DE_DEPRECIACAO',
       resultado,
       [
         temRecuperacaoObservada
-          ? 'Valores de recuperação são observações registradas; totais são separados por moeda e não representam lucro líquido.'
-          : 'Nenhum valor real de recuperação foi registrado no período; somente a referência de depreciação está disponível.',
+          ? 'Valores realizados são observações registradas; totais são separados por moeda e não representam lucro líquido.'
+          : 'Nenhum valor realizado de recuperação foi registrado no período.',
+        temRecuperacaoEstimada
+          ? 'Valores estimados são avaliações informadas, não previsões calculadas pelo sistema.'
+          : 'Nenhuma avaliação estimada foi registrada no período.',
         'A referência de depreciação não é valor monetário nem rentabilidade financeira garantida.',
       ],
       idempotenciaId,
     );
+  }
+
+  private resumirRecuperacoes(valoresPorMoeda: Map<string, number[]> | undefined) {
+    return Array.from(valoresPorMoeda?.entries() ?? [])
+      .sort(([moedaA], [moedaB]) => moedaA.localeCompare(moedaB))
+      .map(([moeda, valores]) => ({
+            moeda,
+            amostras: valores.length,
+            total: Number(valores.reduce((soma, valor) => soma + valor, 0).toFixed(2)),
+            mediaPorRegistro: calcularMedia(valores) ?? 0,
+      }));
   }
 
   async executarVidaUtil(periodo: PeriodoAnalise = {}, idempotenciaId?: string) {

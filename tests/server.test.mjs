@@ -170,6 +170,65 @@ test('API pública isola rastreamento pela organização e exige permissão', as
   }
 });
 
+test('API pública executa snapshots analíticos sob o escopo da organização da chave', async () => {
+  const segredo = 'gc_live_analises_publicas';
+  const hash = createHash('sha256').update(segredo).digest('hex');
+  const organizacoesConsultadas = [];
+  const snapshots = [];
+  const app = criarAplicacao({
+    chaveApi: {
+      findUnique: async ({ where }) => where.hashSecret === hash ? ({
+        id: 'KEY-ANALYSIS', ativa: true, revogadaEm: null, expiraEm: null,
+        permissoes: ['ANALISES_LEITURA'], parceiroId: 'PARTNER-ANALYSIS',
+        parceiro: { id: 'PARTNER-ANALYSIS', nome: 'Parceiro', organizacaoId: 'ORG-ONLY', ativo: true },
+      }) : null,
+      update: async () => ({}),
+    },
+    lote: { findMany: async ({ where }) => { organizacoesConsultadas.push(where.organizacaoId); return []; } },
+    eventoAuditoria: { findMany: async () => [] },
+    equipamento: { findMany: async ({ where }) => { organizacoesConsultadas.push(where.lote.organizacaoId); return []; } },
+    parametroGlobal: { findFirst: async () => null },
+    resultadoAnalise: {
+      create: async ({ data }) => {
+        snapshots.push(data);
+        return { ...data, realizadaEm: new Date('2026-11-23T12:00:00.000Z') };
+      },
+    },
+    $queryRaw: async () => 1,
+    $disconnect: async () => {},
+  });
+
+  try {
+    const headers = { 'x-api-key': segredo };
+    const requests = [
+      ['/api/v1/public/analyses/efficiency', { inicio: '2026-01-01T00:00:00.000Z', fim: '2026-12-31T23:59:59.999Z' }],
+      ['/api/v1/public/analyses/profitability', { inicio: '2026-01-01T00:00:00.000Z', fim: '2026-12-31T23:59:59.999Z' }],
+      ['/api/v1/public/analyses/remaining-life', {}],
+    ];
+    for (const [url, payload] of requests) {
+      const response = await app.inject({ method: 'POST', url, headers, payload });
+      assert.equal(response.statusCode, 201, response.body);
+      assert.equal(response.json().organizacaoId, 'ORG-ONLY');
+    }
+    assert.equal(snapshots.length, 3);
+    assert.ok(organizacoesConsultadas.every((organizacaoId) => organizacaoId === 'ORG-ONLY'));
+
+    const semChave = await app.inject({
+      method: 'POST', url: '/api/v1/public/analyses/efficiency',
+      payload: { inicio: '2026-01-01T00:00:00.000Z', fim: '2026-12-31T23:59:59.999Z' },
+    });
+    assert.equal(semChave.statusCode, 401);
+
+    const periodoInvalido = await app.inject({
+      method: 'POST', url: '/api/v1/public/analyses/efficiency', headers,
+      payload: { inicio: '2026-12-31T23:59:59.999Z', fim: '2026-01-01T00:00:00.000Z' },
+    });
+    assert.equal(periodoInvalido.statusCode, 400);
+  } finally {
+    await app.close();
+  }
+});
+
 test('documentação OpenAPI descreve rotas, schemas de entrada e autenticação JWT', async () => {
   const app = criarAplicacao({
     $queryRaw: async () => 1,
@@ -237,6 +296,14 @@ test('documentação OpenAPI descreve rotas, schemas de entrada e autenticação
       openApi.paths['/api/v1/public/reports/async'].post.security,
       [{ apiKeyAuth: [] }],
     );
+    for (const path of [
+      '/api/v1/public/analyses/efficiency',
+      '/api/v1/public/analyses/profitability',
+      '/api/v1/public/analyses/remaining-life',
+    ]) {
+      assert.ok(openApi.paths[path].post);
+      assert.deepEqual(openApi.paths[path].post.security, [{ apiKeyAuth: [] }]);
+    }
     for (const [path, pathItem] of Object.entries(openApi.paths)) {
       for (const operation of Object.values(pathItem)) {
         if (!operation || typeof operation !== 'object' || !('responses' in operation)) continue;
@@ -418,6 +485,9 @@ test('login HTTP verifica credenciais reais e emite JWT mínimo, expirável e ut
       payload: { usuario, senha },
     });
     assert.equal(login.statusCode, 200);
+    const credencialAtualizada = await prisma.credencial.findUnique({ where: { id: usuarioId } });
+    assert.match(credencialAtualizada.hashSenha, /^\$2[aby]\$12\$/);
+    assert.equal(credencialAtualizada.salt, null);
     const resposta = login.json();
     assert.equal(resposta.tokenType, 'Bearer');
     assert.equal(resposta.expiresIn, '30m');

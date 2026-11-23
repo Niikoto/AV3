@@ -20,7 +20,7 @@
     "db:migrate:dev": "prisma migrate dev",
     "db:migrate:status": "prisma migrate status",
     "db:seed": "npm run build && node prisma/seed.mjs",
-    "test": "npm run build && node --test tests/av1.test.mjs tests/analytical.test.mjs tests/async-reports.test.mjs tests/server.test.mjs tests/repositories.test.mjs tests/services-prisma.test.mjs"
+    "test": "npm run build && node --test tests/av1.test.mjs tests/analytical.test.mjs tests/async-reports.test.mjs tests/server.test.mjs tests/repositories.test.mjs tests/services-prisma.test.mjs tests/public-api-e2e.test.mjs"
   },
   "dependencies": {
     "@fastify/jwt": "^10.2.5",
@@ -29,6 +29,8 @@
     "@fastify/swagger-ui": "^6.1.2",
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",
+    "@types/bcrypt": "^5.0.2",
+    "bcrypt": "^6.0.0",
     "bullmq": "^6.7.8",
     "dotenv": "^18.0.8",
     "fastify": "^5.6.2",

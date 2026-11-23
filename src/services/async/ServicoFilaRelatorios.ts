@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
@@ -46,6 +46,7 @@ export class ServicoFilaRelatorios {
   private queue: FilaRelatorios | null = null;
   private worker: WorkerRelatorios | null = null;
   private readonly diretorioRelatorios = join(process.cwd(), 'reports');
+  private timerLimpeza: NodeJS.Timeout | null = null;
 
   constructor(
     private prisma: PrismaClient,
@@ -154,6 +155,11 @@ export class ServicoFilaRelatorios {
       );
       return false;
     }
+    this.agendarLimpeza();
+    await this.limparTarefasExpiradas().catch((error) => this.app?.log.error(
+      { errorName: error instanceof Error ? error.name : 'UnknownError' },
+      'Falha na limpeza inicial de arquivos e tarefas de relatórios expirados.',
+    ));
     return true;
   }
 
@@ -180,8 +186,14 @@ export class ServicoFilaRelatorios {
           type: 'exponential',
           delay: this.numeroPositivo(process.env.ASYNC_REPORT_BACKOFF_MS, 1000),
         },
-        removeOnComplete: 100,
-        removeOnFail: 100,
+        removeOnComplete: {
+          age: this.numeroPositivo(process.env.ASYNC_REPORT_COMPLETED_RETENTION_HOURS, 24) * 3600,
+          count: this.numeroPositivo(process.env.ASYNC_REPORT_MAX_RETAINED_COMPLETED, 500),
+        },
+        removeOnFail: {
+          age: this.numeroPositivo(process.env.ASYNC_REPORT_FAILED_RETENTION_DAYS, 7) * 86_400,
+          count: this.numeroPositivo(process.env.ASYNC_REPORT_MAX_RETAINED_FAILED, 100),
+        },
       });
     } catch (error) {
       await this.prisma.tarefaRelatorio.update({
@@ -203,6 +215,8 @@ export class ServicoFilaRelatorios {
   }
 
   async encerrar(): Promise<void> {
+    if (this.timerLimpeza) clearInterval(this.timerLimpeza);
+    this.timerLimpeza = null;
     const worker = this.worker;
     const queue = this.queue;
     this.worker = null;
@@ -224,6 +238,57 @@ export class ServicoFilaRelatorios {
   private numeroPositivo(valor: string | undefined, padrao: number): number {
     const numero = Number(valor ?? padrao);
     return Number.isInteger(numero) && numero > 0 ? numero : padrao;
+  }
+
+  private agendarLimpeza(): void {
+    if (this.timerLimpeza) clearInterval(this.timerLimpeza);
+    this.timerLimpeza = setInterval(() => {
+      void this.limparTarefasExpiradas().catch((error) => this.app?.log.error(
+        { errorName: error instanceof Error ? error.name : 'UnknownError' },
+        'Falha ao limpar arquivos e tarefas de relatórios expirados.',
+      ));
+    }, 60 * 60 * 1000);
+    this.timerLimpeza.unref();
+  }
+
+  private async limparTarefasExpiradas(): Promise<void> {
+    const agora = Date.now();
+    const limiteConcluidas = new Date(
+      agora - this.numeroPositivo(process.env.ASYNC_REPORT_COMPLETED_RETENTION_HOURS, 24) * 60 * 60 * 1000,
+    );
+    const limiteFalhas = new Date(
+      agora - this.numeroPositivo(process.env.ASYNC_REPORT_FAILED_RETENTION_DAYS, 7) * 24 * 60 * 60 * 1000,
+    );
+    const expiradas = await this.prisma.tarefaRelatorio.findMany({
+      where: {
+        OR: [
+          { estado: EstadoTarefa.CONCLUIDA, concluidoEm: { lte: limiteConcluidas } },
+          { estado: EstadoTarefa.FALHOU, concluidoEm: { lte: limiteFalhas } },
+          { estado: EstadoTarefa.FALHOU, concluidoEm: null, criadoEm: { lte: limiteFalhas } },
+        ],
+      },
+      select: { id: true, estado: true, arquivoNome: true },
+      take: 500,
+    });
+
+    for (const tarefa of expiradas) {
+      const job = await this.queue?.getJob(tarefa.id);
+      if (job) {
+        const estadoJob = await job.getState();
+        if (estadoJob !== 'completed' && estadoJob !== 'failed') continue;
+        await job.remove().catch(() => {});
+      }
+
+      if (tarefa.arquivoNome) {
+        if (tarefa.arquivoNome !== `${tarefa.id}.json` && tarefa.arquivoNome !== `${tarefa.id}.csv`) continue;
+        try {
+          await unlink(join(this.diretorioRelatorios, tarefa.arquivoNome));
+        } catch (error) {
+          if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) continue;
+        }
+      }
+      await this.prisma.tarefaRelatorio.deleteMany({ where: { id: tarefa.id } });
+    }
   }
 
   private async processar(dados: DadosRelatorio): Promise<void> {
@@ -296,6 +361,7 @@ export class ServicoFilaRelatorios {
         estado: falhaFinal ? EstadoTarefa.FALHOU : EstadoTarefa.AGUARDANDO,
         tentativas: tentativasRealizadas,
         erro: falhaFinal ? error.message : null,
+        ...(falhaFinal ? { concluidoEm: new Date() } : {}),
       },
     });
   }

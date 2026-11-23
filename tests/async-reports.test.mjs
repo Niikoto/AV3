@@ -2,12 +2,47 @@ import 'dotenv/config';
 
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { access, mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import { Queue, QueueEvents, Worker, createPostgresBackend } from 'bullmq';
 import { Pool } from 'pg';
 
 const pausar = (duracaoMs) => new Promise((resolve) => setTimeout(resolve, duracaoMs));
+
+test('limpeza de relatórios remove arquivos e tarefas expiradas sem tocar no histórico analítico', async () => {
+  const { ServicoFilaRelatorios } = await import('../dist/services/async/ServicoFilaRelatorios.js');
+  const idConcluido = randomUUID();
+  const idFalhou = randomUUID();
+  const caminhoConcluido = join(process.cwd(), 'reports', `${idConcluido}.json`);
+  const tarefasRemovidas = [];
+  let filtroConsultado;
+  await mkdir(join(process.cwd(), 'reports'), { recursive: true });
+  await writeFile(caminhoConcluido, '{"teste":true}', 'utf8');
+  const fila = new ServicoFilaRelatorios({
+    tarefaRelatorio: {
+      findMany: async ({ where }) => {
+        filtroConsultado = where;
+        return [
+          { id: idConcluido, estado: 'CONCLUIDA', arquivoNome: `${idConcluido}.json` },
+          { id: idFalhou, estado: 'FALHOU', arquivoNome: null },
+        ];
+      },
+      deleteMany: async ({ where }) => { tarefasRemovidas.push(where.id); return { count: 1 }; },
+    },
+  });
+
+  try {
+    await fila.limparTarefasExpiradas();
+    assert.deepEqual(tarefasRemovidas.sort(), [idConcluido, idFalhou].sort());
+    assert.equal(filtroConsultado.OR[0].estado, 'CONCLUIDA');
+    assert.equal(filtroConsultado.OR[1].estado, 'FALHOU');
+    await assert.rejects(access(caminhoConcluido));
+  } finally {
+    await fila.encerrar();
+  }
+});
 
 test('BullMQ PostgreSQL mantém e recupera trabalhos, tenta novamente e processa em paralelo', {
   skip: !process.env.DATABASE_URL,

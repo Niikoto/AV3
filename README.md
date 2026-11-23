@@ -38,7 +38,8 @@ A API não inclui uma interface web própria. A página `/documentation` fornece
 - `/api/v1/public`: rastreamento, lotes e análises para parceiros externos autenticados por `X-API-Key`.
 - `/api/v1/admin/partners` e `/api/v1/admin/partners/:id/keys`: gestão administrativa de parceiros e chaves.
 - `/api/v1/public/reports/async`, `GET /api/v1/public/reports/:id/status` e `GET /api/v1/public/reports/:id/download`: relatórios assíncronos em JSON ou CSV.
-- `POST /equipment/:id/recoveries` e `POST /equipment/:id/failures`: registros auditáveis para alimentar análises com dados observados.
+- `POST /equipment/:id/recoveries` aceita avaliações estimadas ou realizadas; `/equipment/:id/failures` registra eventos de falha auditáveis.
+- `POST /api/v1/public/analyses/efficiency`, `/profitability` e `/remaining-life`: execuções síncronas de análises para parceiros, isoladas por organização e persistidas como snapshots.
 
 Configure PostgreSQL e as variáveis conforme [Instalação e configuração](docs/INSTALACAO.md). A fila BullMQ usa um schema PostgreSQL próprio e não requer Redis ou WSL. A fila é ativada junto com a API quando `DATABASE_URL` está configurada; use `ASYNC_REPORTS_ENABLED=false` para desativá-la. `ASYNC_REPORT_DB_POOL_MAX` ajusta o pool de conexões por instância BullMQ.
 

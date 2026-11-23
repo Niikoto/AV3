@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   calcularMedia,
+  calcularMediana,
   calcularRegressaoLinear,
   ServicoAnaliticoPrisma,
 } from '../dist/services/prisma/ServicoAnaliticoPrisma.js';
@@ -12,8 +13,37 @@ import { PermissaoApi } from '../dist/generated/prisma/enums.js';
 test('cálculos analíticos calculam médias e rejeitam amostras insuficientes', () => {
   assert.equal(calcularMedia([]), null);
   assert.equal(calcularMedia([2, 4, 6]), 4);
+  assert.equal(calcularMediana([]), null);
+  assert.equal(calcularMediana([9, 1, 5]), 5);
+  assert.equal(calcularMediana([1, 2, 8, 9]), 5);
   assert.equal(calcularRegressaoLinear([{ x: 1, y: 2 }]), null);
   assert.equal(calcularRegressaoLinear([{ x: 1, y: 2 }, { x: 1, y: 3 }]), null);
+});
+
+test('eficiência persiste mediana e agregações por mês, organização e operador', async () => {
+  const lotes = [
+    { id: 'L-1', organizacaoId: 'ORG-1', dataEntrada: new Date('2026-10-01T00:00:00Z'), dataConclusaoTriagem: new Date('2026-10-02T00:00:00Z') },
+    { id: 'L-2', organizacaoId: 'ORG-1', dataEntrada: new Date('2026-10-03T00:00:00Z'), dataConclusaoTriagem: new Date('2026-10-05T00:00:00Z') },
+    { id: 'L-3', organizacaoId: 'ORG-1', dataEntrada: new Date('2026-11-01T00:00:00Z'), dataConclusaoTriagem: new Date('2026-11-04T00:00:00Z') },
+  ];
+  let snapshot;
+  const prisma = {
+    lote: { findMany: async () => lotes },
+    eventoAuditoria: { findMany: async () => lotes.map((lote, i) => ({
+      usuarioResponsavel: i === 2 ? 'op-b' : 'op-a',
+      dadosDepois: { id: lote.id },
+    })) },
+    resultadoAnalise: { create: async ({ data }) => { snapshot = data; return data; } },
+  };
+  await new ServicoAnaliticoPrisma(prisma).executarEficiencia({});
+  const resultado = snapshot.resultados;
+  assert.equal(resultado.tempoMedianoHoras, 48);
+  assert.deepEqual(resultado.porMes.map(({ mes, amostras, tempoMedianoHoras }) => ({ mes, amostras, tempoMedianoHoras })), [
+    { mes: '2026-10', amostras: 2, tempoMedianoHoras: 36 },
+    { mes: '2026-11', amostras: 1, tempoMedianoHoras: 72 },
+  ]);
+  assert.equal(resultado.porOrganizacao[0].tempoMedianoHoras, 48);
+  assert.equal(resultado.porOperador.find(({ operador }) => operador === 'op-a').tempoMedianoHoras, 36);
 });
 
 test('regressão linear simples é calculada pelos mínimos quadrados ordinários', () => {
@@ -50,7 +80,7 @@ test('reprocessamento do mesmo relatório atualiza o resultado analítico sem du
   assert.equal(resultados.get('TAREFA-1-EFICIENCIA').id, 'TAREFA-1-EFICIENCIA');
 });
 
-test('rentabilidade separa valores observados por moeda da referência de depreciação', async () => {
+test('rentabilidade separa valores estimados e realizados por moeda da referência de depreciação', async () => {
   let persistido;
   const prisma = {
     equipamento: {
@@ -62,9 +92,9 @@ test('rentabilidade separa valores observados por moeda da referência de deprec
         anoFabricacao: new Date().getFullYear() - 2,
         pesoQuilogramas: 2,
         recuperacoes: [
-          { valorRecuperado: 25.5, moeda: 'BRL' },
-          { valorRecuperado: 10, moeda: 'BRL' },
-          { valorRecuperado: 7, moeda: 'USD' },
+          { tipo: 'REALIZADO', valorRecuperado: 25.5, moeda: 'BRL' },
+          { tipo: 'REALIZADO', valorRecuperado: 10, moeda: 'BRL' },
+          { tipo: 'ESTIMADO', valorRecuperado: 7, moeda: 'USD' },
         ],
       }],
     },
@@ -76,9 +106,11 @@ test('rentabilidade separa valores observados por moeda da referência de deprec
 
   const categoria = persistido.resultados.categorias[0];
   assert.equal(persistido.resultados.valorRecuperacaoObservadoDisponivel, true);
-  assert.equal(persistido.resultados.valorRecuperacaoEstimadoDisponivel, false);
+  assert.equal(persistido.resultados.valorRecuperacaoEstimadoDisponivel, true);
   assert.deepEqual(categoria.recuperacaoObservada, [
     { moeda: 'BRL', amostras: 2, total: 35.5, mediaPorRegistro: 17.75 },
+  ]);
+  assert.deepEqual(categoria.recuperacaoEstimada, [
     { moeda: 'USD', amostras: 1, total: 7, mediaPorRegistro: 7 },
   ]);
   assert.equal(typeof categoria.referenciaDepreciacaoMedia, 'number');

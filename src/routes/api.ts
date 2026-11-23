@@ -778,13 +778,14 @@ export function registrarRotasApi(
   }, async (request) => executar(() => recuperacoes.listar(request.params.id)));
 
   app.post<{ Params: IdentificadorParams; Body: {
-    material: string; valorRecuperado: number; moeda?: string; dataRecuperacao: string;
+    material: string; tipo?: 'ESTIMADO' | 'REALIZADO'; valorRecuperado: number; moeda?: string; dataRecuperacao: string;
     origem: string; observacao?: string;
   } }>('/equipment/:id/recoveries', {
     schema: {
       ...schemaParamsId,
       ...schemaBody(['material', 'valorRecuperado', 'dataRecuperacao', 'origem'], {
         material: schemaNaoVazio,
+        tipo: { type: 'string', enum: ['ESTIMADO', 'REALIZADO'] },
         valorRecuperado: { type: 'number', exclusiveMinimum: 0, maximum: 9_999_999_999.99, multipleOf: 0.01 },
         moeda: { type: 'string', pattern: '^[A-Za-z]{3}$' },
         dataRecuperacao: schemaData,

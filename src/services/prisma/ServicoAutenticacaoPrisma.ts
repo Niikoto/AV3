@@ -1,3 +1,4 @@
+import bcrypt from 'bcrypt';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { CredencialRepository } from '../../repositories/CredencialRepository.js';
 import type { Prisma, PrismaClient } from '../../generated/prisma/client.js';
@@ -40,13 +41,12 @@ export class ServicoAutenticacaoPrisma {
       if (existentes.some((credencial) => credencial.usuario === usuarioNormalizado)) {
         throw new Error('Já existe uma credencial para este usuário.');
       }
-      const salt = randomBytes(16).toString('hex');
       const credencial = await repository.criar({
         id: randomBytes(16).toString('hex'),
         usuario: usuarioNormalizado,
         nomeExibicao: nomeNormalizado,
-        hashSenha: this.calcularHashSenha(senha, salt),
-        salt,
+        hashSenha: await this.calcularHashSenhaBcrypt(senha),
+        salt: null,
         ultimoAcesso: new Date(),
         papel,
       });
@@ -66,13 +66,17 @@ export class ServicoAutenticacaoPrisma {
 
   async autenticar(usuario: string, senha: string): Promise<CredencialAutenticada> {
     const credencial = await new CredencialRepository(this.prisma).buscarPorUsuarioAtivo(usuario);
-    if (!credencial || !this.verificarSenha(senha, credencial.salt, credencial.hashSenha)) {
+    if (!credencial || !await this.verificarSenha(senha, credencial.salt, credencial.hashSenha)) {
       throw new Error('Usuário ou senha inválidos.');
     }
+
+    const hashLegado = !this.eHashBcrypt(credencial.hashSenha);
+    const hashAtualizado = hashLegado ? await this.calcularHashSenhaBcrypt(senha) : undefined;
 
     const atualizada = await this.prisma.$transaction(async (tx) => {
       const atual = await new CredencialRepository(tx).atualizar(credencial.id, {
         ultimoAcesso: new Date(),
+        ...(hashAtualizado ? { hashSenha: hashAtualizado, salt: null } : {}),
       });
       await ServicoAuditoriaPrisma.registrarNaTransacao(tx, {
         operacao: 'LOGIN',
@@ -174,10 +178,9 @@ export class ServicoAutenticacaoPrisma {
     await this.prisma.$transaction(async (tx) => {
       await this.exigirAdministrador(tx, administradorId);
       const credencial = await this.buscarAtivaPorIdentificador(tx, usuario);
-      const salt = randomBytes(16).toString('hex');
       await new CredencialRepository(tx).atualizar(credencial.id, {
-        salt,
-        hashSenha: this.calcularHashSenha(senhaNova, salt),
+        salt: null,
+        hashSenha: await this.calcularHashSenhaBcrypt(senhaNova),
         ultimoAcesso: new Date(),
       });
       await ServicoAuditoriaPrisma.registrarNaTransacao(tx, {
@@ -198,11 +201,10 @@ export class ServicoAutenticacaoPrisma {
       if (credencial.papel === PapelUsuario.AUDITOR) {
         throw new Error('Auditores possuem acesso somente para consulta.');
       }
-      if (!this.verificarSenha(senhaAntiga, credencial.salt, credencial.hashSenha)) return false;
-      const salt = randomBytes(16).toString('hex');
+      if (!await this.verificarSenha(senhaAntiga, credencial.salt, credencial.hashSenha)) return false;
       await repository.atualizar(usuarioId, {
-        salt,
-        hashSenha: this.calcularHashSenha(senhaNova, salt),
+        salt: null,
+        hashSenha: await this.calcularHashSenhaBcrypt(senhaNova),
         ultimoAcesso: new Date(),
       });
       await ServicoAuditoriaPrisma.registrarNaTransacao(tx, {
@@ -227,13 +229,12 @@ export class ServicoAutenticacaoPrisma {
           throw new Error('Não é permitido desativar o último administrador ativo.');
         }
       }
-      const salt = randomBytes(16).toString('hex');
       await repository.atualizar(credencial.id, {
         ativo: false,
         usuario: `__INATIVO__${credencial.id}`,
         nomeExibicao: '',
-        salt,
-        hashSenha: this.calcularHashSenha(randomBytes(32).toString('hex'), salt),
+        salt: null,
+        hashSenha: await this.calcularHashSenhaBcrypt(randomBytes(32).toString('hex')),
       });
       await ServicoAuditoriaPrisma.registrarNaTransacao(tx, {
         operacao: 'DESATIVAR_CREDENCIAL',
@@ -274,7 +275,8 @@ export class ServicoAutenticacaoPrisma {
     return permissoesPorPapel[papel].includes(acao);
   }
 
-  private verificarSenha(senha: string, salt: string, hashArmazenado: string): boolean {
+  private async verificarSenha(senha: string, salt: string | null, hashArmazenado: string): Promise<boolean> {
+    if (this.eHashBcrypt(hashArmazenado)) return bcrypt.compare(senha, hashArmazenado);
     if (!hashArmazenado || !salt) return false;
     const hashInformado = Buffer.from(this.calcularHashSenha(senha, salt), 'hex');
     const hashEsperado = Buffer.from(hashArmazenado, 'hex');
@@ -283,6 +285,16 @@ export class ServicoAutenticacaoPrisma {
 
   private calcularHashSenha(senha: string, salt: string): string {
     return createHash('sha256').update(`${salt}:${senha}`, 'utf-8').digest('hex');
+  }
+
+  private async calcularHashSenhaBcrypt(senha: string): Promise<string> {
+    const custo = Number(process.env.PASSWORD_BCRYPT_COST ?? 12);
+    const custoSeguro = Number.isInteger(custo) && custo >= 10 && custo <= 15 ? custo : 12;
+    return bcrypt.hash(senha, custoSeguro);
+  }
+
+  private eHashBcrypt(hash: string): boolean {
+    return /^\$2[aby]\$\d{2}\$/.test(hash);
   }
 
   private publicarCredencial(credencial: {

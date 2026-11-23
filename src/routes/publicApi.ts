@@ -206,6 +206,98 @@ export function registrarRotasPublicas(app: FastifyInstance, prisma: PrismaClien
       },
     );
 
+    const schemaPeriodoAnalise = {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        inicio: { type: 'string', format: 'date-time' },
+        fim: { type: 'string', format: 'date-time' },
+      },
+    } as const;
+    const schemaPeriodoObrigatorio = {
+      ...schemaPeriodoAnalise,
+      required: ['inicio', 'fim'],
+    } as const;
+    type PeriodoAnaliseBody = { inicio?: string; fim?: string };
+    const validarPeriodoPublico = (periodo: PeriodoAnaliseBody) => {
+      if (Boolean(periodo.inicio) !== Boolean(periodo.fim)) {
+        return 'Informe início e fim juntos.';
+      }
+      if (periodo.inicio && periodo.fim
+        && (!Number.isFinite(Date.parse(periodo.inicio)) || !Number.isFinite(Date.parse(periodo.fim))
+          || Date.parse(periodo.inicio) > Date.parse(periodo.fim))) {
+        return 'Informe um período válido, com início anterior ou igual ao fim.';
+      }
+      return null;
+    };
+    const periodoDate = (periodo: PeriodoAnaliseBody) => ({
+      ...(periodo.inicio ? { inicio: new Date(periodo.inicio) } : {}),
+      ...(periodo.fim ? { fim: new Date(periodo.fim) } : {}),
+    });
+
+    publica.post<{ Body: PeriodoAnaliseBody }>('/api/v1/public/analyses/efficiency', {
+      preHandler: autenticarChave,
+      schema: {
+        tags: ['API pública v1'], summary: 'Calcula eficiência operacional da organização do parceiro',
+        description: 'Cria um snapshot analítico com média e mediana globais, por operador e organização, além de agrupamento mensal. O período filtra a data de entrada; o agrupamento mensal usa a conclusão da triagem.',
+        security: [{ apiKeyAuth: [] }], body: schemaPeriodoObrigatorio,
+        response: { 201: { type: 'object', additionalProperties: true } },
+      },
+    }, async (request, reply) => {
+      const contexto = request.parceiroApi;
+      if (!contexto) return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'Chave necessária.' });
+      try {
+        apiPublica.exigirPermissao(contexto, PermissaoApi.ANALISES_LEITURA);
+      } catch (error) {
+        return reply.code(403).send({ error: 'FORBIDDEN', message: error instanceof Error ? error.message : 'Permissão insuficiente.' });
+      }
+      const erroPeriodo = validarPeriodoPublico(request.body);
+      if (erroPeriodo) return reply.code(400).send({ error: 'BAD_REQUEST', message: erroPeriodo });
+      return reply.code(201).send(await analises.executarEficiencia({ ...periodoDate(request.body), organizacaoId: contexto.organizacaoId }));
+    });
+
+    publica.post<{ Body: PeriodoAnaliseBody }>('/api/v1/public/analyses/profitability', {
+      preHandler: autenticarChave,
+      schema: {
+        tags: ['API pública v1'], summary: 'Calcula rentabilidade observada e estimada da organização do parceiro',
+        description: 'Cria um snapshot de recuperação estimada e realizada, por categoria e moeda. Os valores não representam lucro líquido.',
+        security: [{ apiKeyAuth: [] }], body: schemaPeriodoObrigatorio,
+        response: { 201: { type: 'object', additionalProperties: true } },
+      },
+    }, async (request, reply) => {
+      const contexto = request.parceiroApi;
+      if (!contexto) return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'Chave necessária.' });
+      try {
+        apiPublica.exigirPermissao(contexto, PermissaoApi.ANALISES_LEITURA);
+      } catch (error) {
+        return reply.code(403).send({ error: 'FORBIDDEN', message: error instanceof Error ? error.message : 'Permissão insuficiente.' });
+      }
+      const erroPeriodo = validarPeriodoPublico(request.body);
+      if (erroPeriodo) return reply.code(400).send({ error: 'BAD_REQUEST', message: erroPeriodo });
+      return reply.code(201).send(await analises.executarRentabilidade({ ...periodoDate(request.body), organizacaoId: contexto.organizacaoId }));
+    });
+
+    publica.post<{ Body: PeriodoAnaliseBody }>('/api/v1/public/analyses/remaining-life', {
+      preHandler: autenticarChave,
+      schema: {
+        tags: ['API pública v1'], summary: 'Calcula vida útil remanescente da organização do parceiro',
+        description: 'Cria um snapshot de estimativa de vida útil com o histórico disponível. O período é opcional.',
+        security: [{ apiKeyAuth: [] }], body: schemaPeriodoAnalise,
+        response: { 201: { type: 'object', additionalProperties: true } },
+      },
+    }, async (request, reply) => {
+      const contexto = request.parceiroApi;
+      if (!contexto) return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'Chave necessária.' });
+      try {
+        apiPublica.exigirPermissao(contexto, PermissaoApi.ANALISES_LEITURA);
+      } catch (error) {
+        return reply.code(403).send({ error: 'FORBIDDEN', message: error instanceof Error ? error.message : 'Permissão insuficiente.' });
+      }
+      const erroPeriodo = validarPeriodoPublico(request.body);
+      if (erroPeriodo) return reply.code(400).send({ error: 'BAD_REQUEST', message: erroPeriodo });
+      return reply.code(201).send(await analises.executarVidaUtil({ ...periodoDate(request.body), organizacaoId: contexto.organizacaoId }));
+    });
+
     publica.post<{
       Body: { tipo?: TipoRelatorioAsync; formato?: 'json' | 'csv' };
     }>('/api/v1/public/reports/async', {

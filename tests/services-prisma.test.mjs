@@ -735,6 +735,9 @@ test('serviço Prisma de autenticação protege gestão de credenciais e não pu
     );
     assert.equal(usuario.papel, PapelUsuario.AUDITOR);
     usuarioIds.push(usuario.id);
+    const credencialNova = await prisma.credencial.findUnique({ where: { id: usuario.id } });
+    assert.match(credencialNova.hashSenha, /^\$2[aby]\$12\$/);
+    assert.equal(credencialNova.salt, null);
     await assert.rejects(
       servico.criarCredencial(`${prefixo}-sem-autorizacao`, 'senha', PapelUsuario.AUDITOR),
       /sessão administrativa/i,
